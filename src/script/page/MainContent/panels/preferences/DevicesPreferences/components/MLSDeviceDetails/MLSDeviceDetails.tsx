@@ -17,28 +17,52 @@
  *
  */
 
-import {WireIdentity} from 'src/script/E2EIdentity';
+import {E2EIHandler, MLSStatuses, WireIdentity} from 'src/script/E2EIdentity';
 import {t} from 'Util/LocalizerUtil';
 import {splitFingerprint} from 'Util/StringUtil';
 
 import {styles} from './MLSDeviceDetails.styles';
 
-import {MLSPublicKeys} from '../../../../../../../client';
+import {isKnownSignature, MLSPublicKeys} from '../../../../../../../client';
 import {E2EICertificateDetails} from '../E2EICertificateDetails';
 import {FormattedId} from '../FormattedId';
 
 interface MLSDeviceDetailsProps {
+  cipherSuite?: string;
   isCurrentDevice?: boolean;
   identity?: WireIdentity;
+  isSelfUser?: boolean;
 }
 
-export const MLSDeviceDetails = ({isCurrentDevice, identity}: MLSDeviceDetailsProps) => {
+export const MLSDeviceDetails = ({
+  cipherSuite,
+  isCurrentDevice,
+  identity,
+  isSelfUser = false,
+}: MLSDeviceDetailsProps) => {
   if (!isCurrentDevice && !identity) {
     return null;
   }
+
+  const certificateState = identity?.status ?? MLSStatuses.NOT_ACTIVATED;
+  const isE2EIEnabled = E2EIHandler.getInstance().isE2EIEnabled();
+  const showE2EICertificateDetails =
+    isE2EIEnabled && (isSelfUser || (!isSelfUser && certificateState !== MLSStatuses.NOT_ACTIVATED));
+
+  if (!isSelfUser && certificateState === MLSStatuses.NOT_ACTIVATED) {
+    return null;
+  }
+
+  if (!showE2EICertificateDetails && !identity?.thumbprint) {
+    return null;
+  }
+
   return (
     <div css={styles.wrapper}>
-      <h4 className="paragraph-body-3">{t('mlsSignature', MLSPublicKeys.ED25519.toUpperCase())}</h4>
+      {isKnownSignature(cipherSuite) && (
+        <h4 className="paragraph-body-3">{t('mlsSignature', {signature: MLSPublicKeys[cipherSuite]})}</h4>
+      )}
+
       {identity?.thumbprint && (
         <>
           <p className="label-2 preferences-label preferences-devices-fingerprint-label">{t('mlsThumbprint')}</p>
@@ -48,7 +72,8 @@ export const MLSDeviceDetails = ({isCurrentDevice, identity}: MLSDeviceDetailsPr
           </p>
         </>
       )}
-      <E2EICertificateDetails identity={identity} isCurrentDevice={isCurrentDevice} />
+
+      {showE2EICertificateDetails && <E2EICertificateDetails identity={identity} isCurrentDevice={isCurrentDevice} />}
     </div>
   );
 };

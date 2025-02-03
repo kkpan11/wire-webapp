@@ -31,6 +31,7 @@ import {container} from 'tsyringe';
 import {Runtime} from '@wireapp/commons';
 import {WebAppEvents} from '@wireapp/webapp-events';
 
+import {PrimaryModal} from 'Components/Modals/PrimaryModal';
 import {initializeDataDog} from 'Util/DataDog';
 import {DebugUtil} from 'Util/DebugUtil';
 import {Environment} from 'Util/Environment';
@@ -39,11 +40,10 @@ import {getLogger, Logger} from 'Util/Logger';
 import {includesString} from 'Util/StringUtil';
 import {TIME_IN_MILLIS} from 'Util/TimeUtil';
 import {appendParameter} from 'Util/UrlUtil';
-import {checkIndexedDb, supportsMLS} from 'Util/util';
+import {AppInitializationStep, checkIndexedDb, InitializationEventLogger} from 'Util/util';
 
 import '../../style/default.less';
 import {AssetRepository} from '../assets/AssetRepository';
-import {AssetService} from '../assets/AssetService';
 import {AudioRepository} from '../audio/AudioRepository';
 import {SIGN_OUT_REASON} from '../auth/SignOutReason';
 import {URLParameter} from '../auth/URLParameter';
@@ -52,17 +52,18 @@ import {BackupService} from '../backup/BackupService';
 import {CacheRepository} from '../cache/CacheRepository';
 import {CallingRepository} from '../calling/CallingRepository';
 import {ClientRepository, ClientService} from '../client';
+import {getClientMLSConfig} from '../client/clientMLSConfig';
 import {Configuration} from '../Config';
 import {ConnectionRepository} from '../connection/ConnectionRepository';
 import {ConnectionService} from '../connection/ConnectionService';
 import {ConversationRepository} from '../conversation/ConversationRepository';
 import {ConversationService} from '../conversation/ConversationService';
 import {ConversationVerificationState} from '../conversation/ConversationVerificationState';
-import {registerMLSConversationVerificationStateHandler} from '../conversation/ConversationVerificationStateHandler';
 import {OnConversationE2EIVerificationStateChange} from '../conversation/ConversationVerificationStateHandler/shared';
 import {EventBuilder} from '../conversation/EventBuilder';
 import {MessageRepository} from '../conversation/MessageRepository';
 import {CryptographyRepository} from '../cryptography/CryptographyRepository';
+import {getModalOptions, ModalType} from '../E2EIdentity/Modals';
 import {User} from '../entity/User';
 import {AccessTokenError} from '../error/AccessTokenError';
 import {AuthError} from '../error/AuthError';
@@ -80,15 +81,17 @@ import {ServiceMiddleware} from '../event/preprocessor/ServiceMiddleware';
 import {FederationEventProcessor} from '../event/processor/FederationEventProcessor';
 import {GiphyRepository} from '../extension/GiphyRepository';
 import {GiphyService} from '../extension/GiphyService';
-import {getWebsiteUrl} from '../externalRoute';
+import {externalUrl} from '../externalRoute';
 import {IntegrationRepository} from '../integration/IntegrationRepository';
 import {IntegrationService} from '../integration/IntegrationService';
 import {startNewVersionPolling} from '../lifecycle/newVersionHandler';
+import {scheduleApiVersionUpdate, updateApiVersion} from '../lifecycle/updateRemoteConfigs';
 import {MediaRepository} from '../media/MediaRepository';
 import {initMLSGroupConversations, initialiseSelfAndTeamConversations} from '../mls';
 import {joinConversationsAfterMigrationFinalisation} from '../mls/MLSMigration/migrationFinaliser';
 import {NotificationRepository} from '../notification/NotificationRepository';
 import {PreferenceNotificationRepository} from '../notification/PreferenceNotificationRepository';
+import {configureDownloadPath} from '../page/components/FeatureConfigChange/FeatureConfigChangeHandler/Features/downloadPath';
 import {configureE2EI} from '../page/components/FeatureConfigChange/FeatureConfigChangeHandler/Features/E2EIdentity';
 import {PermissionRepository} from '../permission/PermissionRepository';
 import {PropertiesRepository} from '../properties/PropertiesRepository';
@@ -100,6 +103,7 @@ import {APIClient} from '../service/APIClientSingleton';
 import {Core} from '../service/CoreSingleton';
 import {StorageKey, StorageRepository, StorageService} from '../storage';
 import {TeamRepository} from '../team/TeamRepository';
+import {TeamService} from '../team/TeamService';
 import {AppInitStatisticsValue} from '../telemetry/app_init/AppInitStatisticsValue';
 import {AppInitTelemetry} from '../telemetry/app_init/AppInitTelemetry';
 import {AppInitTimingsStep} from '../telemetry/app_init/AppInitTimingsStep';
@@ -132,7 +136,6 @@ export class App {
   private isLoggingOut = false;
   logger: Logger;
   service: {
-    asset: AssetService;
     conversation: ConversationService;
     event: EventService;
     integration: IntegrationService;
@@ -205,6 +208,7 @@ export class App {
   private _setupRepositories() {
     const repositories: ViewModelRepositories = {} as ViewModelRepositories;
     const selfService = new SelfService();
+    const teamService = new TeamService();
 
     repositories.asset = container.resolve(AssetRepository);
 
@@ -226,10 +230,21 @@ export class App {
       serverTimeHandler,
       repositories.properties,
     );
-    repositories.connection = new ConnectionRepository(new ConnectionService(), repositories.user);
+    repositories.connection = new ConnectionRepository(
+      new ConnectionService(),
+      repositories.user,
+      selfService,
+      teamService,
+    );
     repositories.event = new EventRepository(this.service.event, this.service.notification, serverTimeHandler);
     repositories.search = new SearchRepository(repositories.user);
-    repositories.team = new TeamRepository(repositories.user, repositories.asset);
+
+    repositories.team = new TeamRepository(
+      repositories.user,
+      repositories.asset,
+      () => this.logout(SIGN_OUT_REASON.ACCOUNT_DELETED, true),
+      teamService,
+    );
 
     repositories.message = new MessageRepository(
       /*
@@ -285,6 +300,7 @@ export class App {
       repositories.conversation,
       repositories.permission,
       repositories.audio,
+      repositories.calling,
     );
     repositories.preferenceNotification = new PreferenceNotificationRepository(repositories.user['userState'].self);
 
@@ -302,7 +318,6 @@ export class App {
     const eventService = new EventService();
 
     return {
-      asset: container.resolve(AssetService),
       conversation: new ConversationService(eventService),
       event: eventService,
       integration: new IntegrationService(),
@@ -340,8 +355,8 @@ export class App {
   async initApp(clientType: ClientType, onProgress: (progress: number, message?: string) => void) {
     // add body information
     const startTime = Date.now();
-    const [apiVersionMin, apiVersionMax] = this.config.SUPPORTED_API_RANGE;
-    await this.core.useAPIVersion(apiVersionMin, apiVersionMax, this.config.ENABLE_DEV_BACKEND_API);
+    await updateApiVersion();
+    await scheduleApiVersionUpdate();
 
     const osCssClass = Runtime.isMacOS() ? 'os-mac' : 'os-pc';
     const platformCssClass = Runtime.isDesktopApp() ? 'platform-electron' : 'platform-web';
@@ -367,6 +382,13 @@ export class App {
       onProgress(2.5);
       telemetry.timeStep(AppInitTimingsStep.RECEIVED_ACCESS_TOKEN);
 
+      const selfUser = await this.repository.user.getSelf([{position: 'App.initiateSelfUser', vendor: 'webapp'}]);
+
+      await initializeDataDog(this.config, selfUser.qualifiedId);
+      const eventLogger = new InitializationEventLogger(selfUser.id);
+      eventLogger.log(AppInitializationStep.AppInitialize);
+      onProgress(5, t('initReceivedSelfUser', {user: selfUser.name()}, {}, true));
+
       try {
         await this.core.init(clientType);
       } catch (error) {
@@ -374,17 +396,40 @@ export class App {
         this.logger.error(`Error when initializing core: "${errorMessage}"`, error);
         throw new AccessTokenError(AccessTokenError.TYPE.REQUEST_FORBIDDEN, 'Session has expired');
       }
-      const localClient = await this.core.initClient();
-      if (!localClient) {
-        throw new ClientError(CLIENT_ERROR_TYPE.NO_VALID_CLIENT, 'Client has been deleted on backend');
-      }
-
       this.core.on(CoreEvents.NEW_SESSION, ({userId, clientId}) => {
         const newClient = {class: ClientClassification.UNKNOWN, id: clientId};
         userRepository.addClientToUser(userId, newClient, true);
       });
 
-      const selfUser = await this.initiateSelfUser();
+      await this.initiateSelfUser(selfUser);
+      eventLogger.log(AppInitializationStep.UserInitialize);
+      const localClient = await this.core.getLocalClient();
+      if (!localClient) {
+        throw new ClientError(CLIENT_ERROR_TYPE.NO_VALID_CLIENT, 'Client has been deleted on backend');
+      }
+      const {features: teamFeatures, members: teamMembers} = await teamRepository.initTeam(selfUser.teamId);
+      try {
+        await this.core.initClient(localClient, getClientMLSConfig(teamFeatures));
+      } catch (error) {
+        PrimaryModal.show(PrimaryModal.type.ACKNOWLEDGE, {
+          hideCloseBtn: true,
+          preventClose: true,
+          hideSecondary: true,
+          primaryAction: {
+            action: async () => {
+              await this.logout(SIGN_OUT_REASON.CLIENT_REMOVED, false);
+            },
+            text: t('modalAccountLogoutAction'),
+          },
+          text: {
+            title: t('unknownApplicationErrorTitle'),
+            message: t('modalUnableToReceiveMessages'),
+          },
+        });
+      }
+
+      const e2eiHandler = await configureE2EI(teamFeatures);
+      configureDownloadPath(teamFeatures);
 
       this.core.configureCoreCallbacks({
         groupIdFromConversationId: async conversationId => {
@@ -392,8 +437,6 @@ export class App {
           return conversation?.groupId;
         },
       });
-
-      await initializeDataDog(this.config, selfUser.qualifiedId);
 
       // Setup all event middleware
       const eventStorageMiddleware = new EventStorageMiddleware(this.service.event, selfUser);
@@ -412,46 +455,43 @@ export class App {
       // Setup all the event processors
       const federationEventProcessor = new FederationEventProcessor(eventRepository, serverTimeHandler, selfUser);
       eventRepository.setEventProcessors([federationEventProcessor]);
-
-      onProgress(5, t('initReceivedSelfUser', selfUser.name()));
+      eventLogger.log(AppInitializationStep.SetupEventProcessors);
       telemetry.timeStep(AppInitTimingsStep.RECEIVED_SELF_USER);
       const clientEntity = await this._initiateSelfUserClients(selfUser, clientRepository);
       callingRepository.initAvs(selfUser, clientEntity.id);
       onProgress(7.5, t('initValidatedClient'));
       telemetry.timeStep(AppInitTimingsStep.VALIDATED_CLIENT);
       telemetry.addStatistic(AppInitStatisticsValue.CLIENT_TYPE, clientEntity.type ?? clientType);
-
+      eventLogger.log(AppInitializationStep.ValidatedClient);
       onProgress(10);
       telemetry.timeStep(AppInitTimingsStep.INITIALIZED_CRYPTOGRAPHY);
 
-      const {members: teamMembers, features: teamFeatures} = await teamRepository.initTeam(selfUser.teamId);
-      const e2eiHandler = await configureE2EI(this.logger, teamFeatures);
-      if (e2eiHandler) {
-        /* We first try to do the initial enrollment (if the user has not yet enrolled)
-         * We need to enroll before anything else (in particular joining MLS conversations)
-         * Until the user is enrolled, we need to pause loading the app
-         */
-        await e2eiHandler.attemptEnrollment();
-      }
+      const {connections, deadConnections} = await connectionRepository.getConnections(teamMembers);
 
       telemetry.timeStep(AppInitTimingsStep.RECEIVED_USER_DATA);
 
-      const connections = await connectionRepository.getConnections();
       telemetry.addStatistic(AppInitStatisticsValue.CONNECTIONS, connections.length, 50);
 
-      const conversations = await conversationRepository.loadConversations();
-
+      const conversations = await conversationRepository.loadConversations(connections, deadConnections);
+      eventLogger.log(AppInitializationStep.ConversationsLoaded);
+      // We load all the users the self user is connected with
       await userRepository.loadUsers(selfUser, connections, conversations, teamMembers);
 
-      if (supportsMLS()) {
+      if (this.core.hasMLSDevice) {
         //if mls is supported, we need to initialize the callbacks (they are used when decrypting messages)
         conversationRepository.initMLSConversationRecoveredListener();
-        registerMLSConversationVerificationStateHandler(this.updateConversationE2EIVerificationState);
+        conversationRepository.registerMLSConversationVerificationStateHandler(
+          selfUser.qualifiedId.domain,
+          this.updateConversationE2EIVerificationState,
+          this.showClientCertificateRevokedWarning,
+        );
       }
 
       onProgress(25, t('initReceivedUserData'));
       telemetry.addStatistic(AppInitStatisticsValue.CONVERSATIONS, conversations.length, 50);
       this._subscribeToUnloadEvents(selfUser);
+      this._subscribeToBeforeUnload();
+      eventLogger.log(AppInitializationStep.UserDataLoaded);
 
       await conversationRepository.conversationRoleRepository.loadTeamRoles();
 
@@ -465,10 +505,10 @@ export class App {
         totalNotifications = total;
         onProgress(25 + 50 * (done / total), `${baseMessage}${extraInfo}`);
       });
+      eventLogger.log(AppInitializationStep.DecryptionCompleted, {count: totalNotifications});
 
       await conversationRepository.init1To1Conversations(connections, conversations);
-
-      if (supportsMLS()) {
+      if (this.core.hasMLSDevice) {
         //add the potential `self` and `team` conversations
         await initialiseSelfAndTeamConversations(conversations, selfUser, clientEntity.id, this.core);
 
@@ -489,16 +529,19 @@ export class App {
         });
       }
 
+      eventLogger.log(AppInitializationStep.SetupMLS);
       telemetry.timeStep(AppInitTimingsStep.UPDATED_FROM_NOTIFICATIONS);
       telemetry.addStatistic(AppInitStatisticsValue.NOTIFICATIONS, totalNotifications, 100);
-
-      onProgress(97.5, t('initUpdatedFromNotifications', this.config.BRAND_NAME));
+      onProgress(97.5, t('initUpdatedFromNotifications', {brandName: this.config.BRAND_NAME}));
 
       const clientEntities = await clientRepository.updateClientsForSelf();
-      await eventTrackerRepository.init(propertiesRepository.properties.settings.privacy.telemetry_sharing);
+
+      // We unblock the lock screen by loading this code asynchronously, to make it appear to the user that the app is done loading earlier.
+      void eventTrackerRepository.init(propertiesRepository.getUserConsentStatus().isTelemetryConsentGiven);
 
       onProgress(99);
 
+      eventLogger.log(AppInitializationStep.ClientsUpdated, {count: clientEntities.length});
       telemetry.addStatistic(AppInitStatisticsValue.CLIENTS, clientEntities.length);
       telemetry.timeStep(AppInitTimingsStep.APP_PRE_LOADED);
 
@@ -522,16 +565,10 @@ export class App {
       callingRepository.setReady();
       telemetry.timeStep(AppInitTimingsStep.APP_LOADED);
 
-      this.logger.info(`App loaded in ${Date.now() - startTime}ms`);
+      await e2eiHandler?.startTimers();
+      this.logger.info(`App version ${Environment.version()} loaded in ${Date.now() - startTime}ms`);
 
-      if (e2eiHandler) {
-        // At the end of the process (once conversations are loaded and joined), we can check if we need to renew the user's certificate
-        try {
-          await e2eiHandler.attemptRenewal();
-        } catch (error) {
-          this.logger.error('Failed to renew user certificate: ', error);
-        }
-      }
+      eventLogger.log(AppInitializationStep.AppInitCompleted);
       return selfUser;
     } catch (error) {
       if (error instanceof BaseError) {
@@ -613,24 +650,18 @@ export class App {
    * Initiate the self user by getting it from the backend.
    * @returns Resolves with the self user entity
    */
-  private async initiateSelfUser() {
-    const userEntity = await this.repository.user.getSelf([{position: 'App.initiateSelfUser', vendor: 'webapp'}]);
-
-    this.logger.info(`Loaded self user with ID '${userEntity.id}'`);
-
-    if (!userEntity.hasActivatedIdentity()) {
-      this.logger.info('User does not have an activated identity and seems to be a temporary guest');
-
-      if (!userEntity.isTemporaryGuest()) {
+  private async initiateSelfUser(selfUser: User) {
+    if (!selfUser.hasActivatedIdentity()) {
+      if (!selfUser.isTemporaryGuest()) {
         throw new Error('User does not have an activated identity');
       }
     }
 
     container.resolve(StorageService).init(this.core.storage);
-    this.repository.client.init(userEntity);
-    await this.repository.properties.init(userEntity);
+    this.repository.client.init(selfUser);
+    await this.repository.properties.init(selfUser);
 
-    return userEntity;
+    return selfUser;
   }
 
   /**
@@ -664,7 +695,7 @@ export class App {
    */
   private _subscribeToUnloadEvents(selfUser: User): void {
     window.addEventListener('unload', () => {
-      this.logger.info("'window.onunload' was triggered, so we will disconnect from the backend.");
+      this.logger.info("'window.onunload' was triggered, disconnecting from backend.");
       this.repository.event.disconnectWebSocket();
       this.repository.calling.destroy();
 
@@ -679,6 +710,20 @@ export class App {
     });
   }
 
+  /**
+   * Subscribe to 'beforeunload' to stop calls and disconnect the WebSocket.
+   */
+  private _subscribeToBeforeUnload(): void {
+    window.addEventListener('beforeunload', event => {
+      if (this.repository.calling.hasActiveCall()) {
+        event.preventDefault();
+
+        // Included for legacy support, e.g. Chrome/Edge < 119
+        event.returnValue = true;
+      }
+    });
+  }
+
   //##############################################################################
   // Lifecycle
   //##############################################################################
@@ -689,7 +734,7 @@ export class App {
    * @param signOutReason Cause for logout
    * @param clearData Keep data in database
    */
-  private readonly logout = (signOutReason: SIGN_OUT_REASON, clearData: boolean): Promise<void> | void => {
+  private readonly logout = async (signOutReason: SIGN_OUT_REASON, clearData: boolean) => {
     if (this.isLoggingOut) {
       // Avoid triggering another logout flow if we currently are logging out.
       // This could happen if we trigger the logout flow while the user token is already invalid.
@@ -725,7 +770,7 @@ export class App {
 
       const selfUser = this.repository.user['userState'].self();
       if (selfUser) {
-        const cookieLabelKey = this.repository.client.constructCookieLabelKey(selfUser.email() || selfUser.phone());
+        const cookieLabelKey = this.repository.client.constructCookieLabelKey(selfUser.email());
 
         Object.keys(amplify.store()).forEach(keyInAmplifyStore => {
           const isCookieLabelKey = keyInAmplifyStore === cookieLabelKey;
@@ -794,7 +839,6 @@ export class App {
    * Refresh the web app or desktop wrapper
    */
   readonly refresh = (): void => {
-    this.logger.info('Refresh to update started');
     if (Runtime.isDesktopApp()) {
       // if we are in a desktop env, we just warn the wrapper that we need to reload. It then decide what should be done
       amplify.publish(WebAppEvents.LIFECYCLE.RESTART);
@@ -822,7 +866,7 @@ export class App {
     const isLeavingGuestRoom = isTemporaryGuestReason && this.repository.user['userState'].self()?.isTemporaryGuest();
 
     if (isLeavingGuestRoom) {
-      const websiteUrl = getWebsiteUrl();
+      const websiteUrl = externalUrl.website;
 
       if (websiteUrl) {
         return window.location.replace(websiteUrl);
@@ -854,5 +898,14 @@ export class App {
       default:
         break;
     }
+  };
+
+  private showClientCertificateRevokedWarning = async () => {
+    const {modalOptions, modalType} = getModalOptions({
+      type: ModalType.SELF_CERTIFICATE_REVOKED,
+      primaryActionFn: () => this.logout(SIGN_OUT_REASON.APP_INIT, false),
+    });
+
+    PrimaryModal.show(modalType, modalOptions);
   };
 }

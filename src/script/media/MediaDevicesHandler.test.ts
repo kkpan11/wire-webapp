@@ -35,6 +35,10 @@ describe('MediaDevicesHandler', () => {
    * - 2 cameras
    * - 3 microphones
    * - 4 speakers
+   *
+   * However the devices which look like duplicates in fact refer to different
+   * settings a user can make in the operation system, so we shouldn't filter
+   * them.
    */
   const realWorldTestSetup = {
     microphones: [
@@ -144,9 +148,14 @@ describe('MediaDevicesHandler', () => {
     ],
   };
 
+  let enumerateDevicesSpy: jasmine.Spy;
+
+  beforeEach(() => {
+    enumerateDevicesSpy = spyOn(window.navigator.mediaDevices, 'enumerateDevices');
+  });
   describe('refreshMediaDevices', () => {
-    it('filters duplicate microphones and keeps the ones marked with "communications"', () => {
-      spyOn(navigator.mediaDevices, 'enumerateDevices').and.returnValue(
+    it('does not filter duplicate microphones', done => {
+      enumerateDevicesSpy.and.returnValue(
         Promise.resolve([
           {
             deviceId: 'default',
@@ -170,14 +179,16 @@ describe('MediaDevicesHandler', () => {
       );
 
       const devicesHandler = new MediaDevicesHandler();
+      devicesHandler.initializeMediaDevices(true);
 
       setTimeout(() => {
-        expect(devicesHandler.availableDevices.audioinput().length).toEqual(1);
+        expect(devicesHandler.availableDevices.audioinput().length).toEqual(3);
+        done();
       });
     });
 
-    it('filters duplicate speakers', () => {
-      spyOn(navigator.mediaDevices, 'enumerateDevices').and.returnValue(
+    it('does not filter duplicate speakers', done => {
+      enumerateDevicesSpy.and.returnValue(
         Promise.resolve([
           ...realWorldTestSetup.cameras,
           ...realWorldTestSetup.microphones,
@@ -186,6 +197,7 @@ describe('MediaDevicesHandler', () => {
       );
 
       const devicesHandler = new MediaDevicesHandler();
+      devicesHandler.initializeMediaDevices(true);
 
       expect(realWorldTestSetup.cameras.length).toEqual(2);
       expect(realWorldTestSetup.microphones.length).toEqual(5);
@@ -193,15 +205,15 @@ describe('MediaDevicesHandler', () => {
 
       setTimeout(() => {
         expect(devicesHandler.availableDevices.videoinput().length).toEqual(2);
-        expect(devicesHandler.availableDevices.audioinput().length).toEqual(3);
-        expect(devicesHandler.availableDevices.audiooutput().length).toEqual(4);
+        expect(devicesHandler.availableDevices.audioinput().length).toEqual(5);
+        expect(devicesHandler.availableDevices.audiooutput().length).toEqual(7);
+        done();
       });
     });
   });
 
-  describe('constructor', () => {
+  describe('initializeMediaDevices', () => {
     it('loads available devices and listens to input devices changes', done => {
-      const enumerateDevicesSpy = spyOn(navigator.mediaDevices, 'enumerateDevices');
       enumerateDevicesSpy.and.returnValue(
         Promise.resolve([
           ...fakeWorldTestSetup.cameras,
@@ -211,8 +223,10 @@ describe('MediaDevicesHandler', () => {
       );
 
       const devicesHandler = new MediaDevicesHandler();
+      devicesHandler.initializeMediaDevices(true);
+
       setTimeout(() => {
-        expect(navigator.mediaDevices.enumerateDevices).toHaveBeenCalledTimes(1);
+        expect(enumerateDevicesSpy).toHaveBeenCalledTimes(2);
         expect(devicesHandler.availableDevices.videoinput()).toEqual(fakeWorldTestSetup.cameras);
         expect(devicesHandler.availableDevices.audiooutput()).toEqual(fakeWorldTestSetup.speakers);
 
@@ -221,7 +235,7 @@ describe('MediaDevicesHandler', () => {
         navigator.mediaDevices!.ondevicechange?.(Event.prototype);
 
         setTimeout(() => {
-          expect(navigator.mediaDevices.enumerateDevices).toHaveBeenCalledTimes(2);
+          expect(enumerateDevicesSpy).toHaveBeenCalledTimes(3);
           expect(devicesHandler.availableDevices.videoinput()).toEqual(newCameras);
           expect(devicesHandler.availableDevices.audiooutput()).toEqual([]);
           done();
@@ -232,7 +246,7 @@ describe('MediaDevicesHandler', () => {
 
   describe('currentAvailableDeviceId', () => {
     it('only exposes available device', done => {
-      spyOn(navigator.mediaDevices, 'enumerateDevices').and.returnValue(
+      enumerateDevicesSpy.and.returnValue(
         Promise.resolve([
           ...fakeWorldTestSetup.cameras,
           ...fakeWorldTestSetup.microphones,
@@ -241,6 +255,8 @@ describe('MediaDevicesHandler', () => {
       );
 
       const devicesHandler = new MediaDevicesHandler();
+      devicesHandler.initializeMediaDevices(true);
+
       setTimeout(() => {
         devicesHandler.currentDeviceId.videoinput(fakeWorldTestSetup.cameras[0].deviceId);
 

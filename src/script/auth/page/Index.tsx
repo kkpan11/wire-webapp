@@ -17,32 +17,39 @@
  *
  */
 
-import React, {useEffect, useState} from 'react';
+import React, {useCallback, useEffect, useState} from 'react';
 
-import {SVGIcon} from '@wireapp/react-ui-kit/lib/Icon/SVGIcon';
-import {FormattedMessage, useIntl} from 'react-intl';
+import {FormattedMessage} from 'react-intl';
 import {connect} from 'react-redux';
 import {Navigate, useNavigate} from 'react-router-dom';
 import {AnyAction, Dispatch} from 'redux';
+import {container} from 'tsyringe';
 
 import {UrlUtil} from '@wireapp/commons';
 import {Button, ButtonVariant, ContainerXS, ErrorMessage, Text} from '@wireapp/react-ui-kit';
+
+import {LogoFullIcon} from 'Components/Icon';
+import {Core} from 'src/script/service/CoreSingleton';
+import {isDataDogEnabled} from 'Util/DataDog';
+import {getWebEnvironment} from 'Util/Environment';
+import {t} from 'Util/LocalizerUtil';
 
 import {Page} from './Page';
 
 import {Config} from '../../Config';
 import '../../localization/Localizer';
-import {indexStrings, logoutReasonStrings} from '../../strings';
+import {actionRoot} from '../module/action';
 import {bindActionCreators, RootState} from '../module/reducer';
 import * as AuthSelector from '../module/selector/AuthSelector';
 import {QUERY_KEY, ROUTE} from '../route';
-import {getSVG} from '../util/SVGProvider';
+import {logoutReasonStrings} from '../util/logoutUtil';
+import {getPrefixedSSOCode} from '../util/urlUtil';
 
 type Props = React.HTMLProps<HTMLDivElement>;
 
-const IndexComponent = ({defaultSSOCode}: Props & ConnectedProps & DispatchProps) => {
-  const {formatMessage: _} = useIntl();
+const IndexComponent = ({defaultSSOCode, doInit}: Props & ConnectedProps & DispatchProps) => {
   const navigate = useNavigate();
+  const core = container.resolve(Core);
   const [logoutReason, setLogoutReason] = useState<string>();
 
   useEffect(() => {
@@ -52,9 +59,23 @@ const IndexComponent = ({defaultSSOCode}: Props & ConnectedProps & DispatchProps
     }
   }, []);
 
+  const immediateLogin = useCallback(async () => {
+    await doInit({isImmediateLogin: true, shouldValidateLocalClient: true});
+    // Check if the user is already logged in
+    if (core.getLocalClient()) {
+      navigate(ROUTE.HISTORY_INFO);
+    }
+  }, [core, doInit, navigate]);
+
+  useEffect(() => {
+    if (Config.getConfig().FEATURE.ENABLE_AUTO_LOGIN) {
+      void immediateLogin();
+    }
+  }, [immediateLogin]);
+
   if (defaultSSOCode) {
     // Redirect to prefilled SSO login if default SSO code is set on backend
-    return <Navigate to={`${ROUTE.SSO}/wire-${defaultSSOCode}`} />;
+    return <Navigate to={`${ROUTE.SSO}/${getPrefixedSSOCode(defaultSSOCode)}`} />;
   }
 
   const features = Config.getConfig().FEATURE;
@@ -66,24 +87,42 @@ const IndexComponent = ({defaultSSOCode}: Props & ConnectedProps & DispatchProps
   return (
     <Page>
       <ContainerXS centerText verticalCenter style={{width: '380px'}}>
-        <SVGIcon
+        <LogoFullIcon
           aria-hidden="true"
-          scale={1.3}
-          realWidth={78}
-          realHeight={25}
+          width={102}
+          height={33}
           style={{marginBottom: '80px'}}
           data-uie-name="ui-wire-logo"
-        >
-          <g dangerouslySetInnerHTML={{__html: getSVG('logo-full-icon')?.documentElement?.innerHTML}} />
-        </SVGIcon>
+        />
         <Text
           block
           center
           style={{fontSize: '2rem', fontWeight: 300, marginBottom: '48px'}}
           data-uie-name="welcome-text"
         >
-          {_(indexStrings.welcome, {brandName: Config.getConfig().BACKEND_NAME})}
+          {t('index.welcome', {brandName: Config.getConfig().BACKEND_NAME})}
         </Text>
+
+        {!getWebEnvironment().isProduction && isDataDogEnabled() && (
+          <Text
+            block
+            center
+            style={{fontSize: '0.75rem', fontWeight: 300, marginBottom: '48px'}}
+            data-uie-name="disclaimer"
+          >
+            <FormattedMessage
+              id="index.disclaimer"
+              values={{
+                link: (
+                  <a href="https://app.wire.com" rel="noopener noreferrer">
+                    wire.com
+                  </a>
+                ),
+              }}
+            />
+          </Text>
+        )}
+
         {features.ENABLE_ACCOUNT_REGISTRATION && (
           <Button
             type="button"
@@ -91,16 +130,16 @@ const IndexComponent = ({defaultSSOCode}: Props & ConnectedProps & DispatchProps
             block
             data-uie-name="go-set-account-type"
           >
-            {_(indexStrings.createAccount)}
+            {t('index.createAccount')}
           </Button>
         )}
         <Button type="button" onClick={() => navigate(ROUTE.LOGIN)} block data-uie-name="go-login">
-          {_(indexStrings.logIn)}
+          {t('index.login')}
         </Button>
         {logoutReason && (
           <ErrorMessage data-uie-name="status-logout-reason">
             <FormattedMessage
-              {...logoutReasonStrings[logoutReason]}
+              id={logoutReasonStrings[logoutReason]}
               values={{
                 newline: <br />,
               }}
@@ -116,7 +155,7 @@ const IndexComponent = ({defaultSSOCode}: Props & ConnectedProps & DispatchProps
             style={{marginTop: '120px'}}
             data-uie-name="go-sso-login"
           >
-            {_(features.ENABLE_DOMAIN_DISCOVERY ? indexStrings.enterprise : indexStrings.ssoLogin)}
+            {t(features.ENABLE_DOMAIN_DISCOVERY ? 'index.enterprise' : 'index.ssoLogin')}
           </Button>
         )}
       </ContainerXS>
@@ -130,7 +169,13 @@ const mapStateToProps = (state: RootState) => ({
 });
 
 type DispatchProps = ReturnType<typeof mapDispatchToProps>;
-const mapDispatchToProps = (dispatch: Dispatch<AnyAction>) => bindActionCreators({}, dispatch);
+const mapDispatchToProps = (dispatch: Dispatch<AnyAction>) =>
+  bindActionCreators(
+    {
+      doInit: actionRoot.authAction.doInit,
+    },
+    dispatch,
+  );
 
 const Index = connect(mapStateToProps, mapDispatchToProps)(IndexComponent);
 

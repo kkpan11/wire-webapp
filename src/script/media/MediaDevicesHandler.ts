@@ -69,6 +69,7 @@ export interface ElectronDesktopCapturerSource {
   display_id: string;
   id: string;
   name: string;
+  thumbnail: HTMLCanvasElement;
 }
 
 export class MediaDevicesHandler {
@@ -78,6 +79,8 @@ export class MediaDevicesHandler {
   public currentAvailableDeviceId: CurrentAvailableDeviceId;
   public deviceSupport: DeviceSupport;
   private previousDeviceSupport: PreviousDeviceSupport;
+  private onMediaDevicesRefresh?: () => void;
+  private devicesAreInit = false;
 
   static get CONFIG() {
     return {
@@ -152,19 +155,36 @@ export class MediaDevicesHandler {
       videoinput: this.availableDevices.videoinput().length,
     };
 
-    this.initializeMediaDevices();
+    // The device list must be queried once to obtain the device IDs. This way, the frontend knows whether cameras
+    // and microphones exist and can request them specifically during a call. Additionally, the app needs to know
+    // the device IDs; otherwise, we will receive a Media-Query-Constraint error when querying the devices, as we
+    // explicitly query by the device ID.
+    // The false parameter ensures that we only load the list temporarily.
+    this.initializeMediaDevices(false);
+  }
+
+  public setOnMediaDevicesRefreshHandler(handler: () => void): void {
+    this.onMediaDevicesRefresh = handler;
   }
 
   /**
    * Initialize the list of MediaDevices and subscriptions.
+   * @camera: boolean, Only when the camera is queried can the entire device list be accessed.
+   * @return Promise<void>
    */
-  private initializeMediaDevices(): void {
-    if (Runtime.isSupportingUserMedia()) {
-      this.refreshMediaDevices().then(() => {
+  public async initializeMediaDevices(camera = false): Promise<void> {
+    if (Runtime.isSupportingUserMedia() && !this.devicesAreInit) {
+      return this.refreshMediaDevices(camera).then(() => {
         this.subscribeToObservables();
         this.subscribeToDevices();
+        // The web browser cannot access the device labels without a camera stream.
+        // The device list is only complete when the camera was initialized.
+        if (camera) {
+          this.devicesAreInit = true;
+        }
       });
     }
+    return Promise.resolve();
   }
 
   /**
@@ -214,38 +234,22 @@ export class MediaDevicesHandler {
       device => device.kind === MediaDeviceType.VIDEO_INPUT,
     );
 
-    /*
-     * On Windows the same device can be listed multiple times with different group ids ("default", "communications", etc.).
-     * In such a scenario, the device listed as "communications" device is preferred for conferencing calls, so we filter its duplicates.
-     */
     const microphones = mediaDevices.filter(device => device.kind === MediaDeviceType.AUDIO_INPUT);
-    const dedupedMicrophones = microphones.reduce<Record<string, MediaDeviceInfo>>((microphoneList, microphone) => {
-      if (!microphoneList.hasOwnProperty(microphone.deviceId) || microphone.deviceId === 'communications') {
-        microphoneList[microphone.groupId] = microphone;
-      }
-      return microphoneList;
-    }, {});
-
     const speakers = mediaDevices.filter(device => device.kind === MediaDeviceType.AUDIO_OUTPUT);
-    const dedupedSpeakers = speakers.reduce<Record<string, MediaDeviceInfo>>((speakerList, speaker) => {
-      if (!speakerList.hasOwnProperty(speaker.deviceId) || speaker.deviceId === 'communications') {
-        speakerList[speaker.groupId] = speaker;
-      }
-      return speakerList;
-    }, {});
-
     return {
       cameras: videoInputDevices,
-      microphones: Object.values(dedupedMicrophones),
-      speakers: Object.values(dedupedSpeakers),
+      microphones: microphones,
+      speakers: speakers,
     };
   }
 
   /**
    * Update list of available MediaDevices.
+   * @param [camera=false] If `camera=true`, a video track is also created when the device list is read.
+   * This ensures that the video device labels can also be read. This is necessary for initializing the entire device list.
    * @returns Resolves with all MediaDevices when the list has been updated
    */
-  refreshMediaDevices(): Promise<MediaDeviceInfo[]> {
+  public async refreshMediaDevices(camera = false): Promise<MediaDeviceInfo[]> {
     const setDevices = (type: MediaDeviceType, devices: MediaDeviceInfo[]): void => {
       this.availableDevices[type](devices);
       const currentId = this.currentDeviceId[type];
@@ -265,31 +269,32 @@ export class MediaDevicesHandler {
       }
     };
 
-    return navigator.mediaDevices
-      .enumerateDevices()
-      .catch(error => {
-        this.logger.error(`Failed to update MediaDevice list: ${error.message}`, error);
-        throw error;
-      })
-      .then(mediaDevices => {
-        this.removeAllDevices();
+    try {
+      this.removeAllDevices();
+      const mediaDevices = await window.navigator.mediaDevices.enumerateDevices();
 
-        if (mediaDevices) {
-          const filteredDevices = this.filterMediaDevices(mediaDevices);
-
-          setDevices(MediaDeviceType.AUDIO_INPUT, filteredDevices.microphones);
-          setDevices(MediaDeviceType.AUDIO_OUTPUT, filteredDevices.speakers);
-          setDevices(MediaDeviceType.VIDEO_INPUT, filteredDevices.cameras);
-          this.previousDeviceSupport = {
-            audioinput: filteredDevices.microphones.length,
-            audiooutput: filteredDevices.speakers.length,
-            videoinput: filteredDevices.cameras.length,
-          };
-          return mediaDevices;
-        }
-
+      if (!mediaDevices) {
         throw new Error('No media devices found');
-      });
+      }
+
+      const {microphones, speakers, cameras} = this.filterMediaDevices(mediaDevices);
+
+      setDevices(MediaDeviceType.AUDIO_INPUT, microphones);
+      setDevices(MediaDeviceType.AUDIO_OUTPUT, speakers);
+      setDevices(MediaDeviceType.VIDEO_INPUT, cameras);
+      this.previousDeviceSupport = {
+        audioinput: microphones.length,
+        audiooutput: speakers.length,
+        videoinput: cameras.length,
+      };
+
+      this.onMediaDevicesRefresh?.();
+
+      return mediaDevices;
+    } catch (error) {
+      this.logger.error(`Failed to update MediaDevice list: ${error instanceof Error ? error.message : ''}`, error);
+      throw error;
+    }
   }
 
   /**

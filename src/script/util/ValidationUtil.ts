@@ -17,7 +17,7 @@
  *
  */
 
-import {Config} from '../Config';
+import {ValidationError} from '../auth/module/action/ValidationError';
 
 export class ValidationUtilError extends Error {
   constructor(message = 'Unknown ValidationUtilError') {
@@ -35,19 +35,6 @@ export class ValidationUtilError extends Error {
 }
 
 export const isValidUsername = (username: string) => /^@?[a-z_0-9.-]{2,256}$/.test(username);
-
-/**
- * Checks if input has the format of an international phone number
- * @note Begins with + and contains only numbers
- * @param phoneNumber Input
- * @returns `true`, if the input a phone number
- */
-export const isValidPhoneNumber = (phoneNumber: string): boolean => {
-  const allowDebugPhoneNumbers = Config.getConfig().FEATURE.ENABLE_DEBUG;
-  const regularExpression = allowDebugPhoneNumbers ? /^\+[0-9]\d{1,14}$/ : /^\+[1-9]\d{1,14}$/;
-
-  return regularExpression.test(phoneNumber);
-};
 
 export const isValidEmail = (email: string): boolean => {
   const regExp =
@@ -107,4 +94,14 @@ export const assetV3 = (assetKey: string, assetToken?: string): true => {
     throw new ValidationUtilError('Invalid asset token');
   }
   return true;
+};
+
+export const validationErrorStrings = {
+  [ValidationError.FIELD.NAME.PATTERN_MISMATCH]: 'ValidationError.FIELD.NAME.PATTERN_MISMATCH',
+  [ValidationError.FIELD.NAME.VALUE_MISSING]: 'ValidationError.FIELD.NAME.VALUE_MISSING',
+  [ValidationError.FIELD.PASSWORD.PATTERN_MISMATCH]: 'ValidationError.FIELD.PASSWORD.PATTERN_MISMATCH',
+  [ValidationError.FIELD.PASSWORD_LOGIN.PATTERN_MISMATCH]: 'ValidationError.FIELD.PASSWORD_LOGIN.PATTERN_MISMATCH',
+  [ValidationError.FIELD.SSO_CODE.PATTERN_MISMATCH]: 'ValidationError.FIELD.SSO_CODE.PATTERN_MISMATCH',
+  [ValidationError.FIELD.SSO_EMAIL_CODE.PATTERN_MISMATCH]: 'ValidationError.FIELD.SSO_EMAIL_CODE.PATTERN_MISMATCH',
+  [ValidationError.FIELD.EMAIL.TYPE_MISMATCH]: 'ValidationError.FIELD.EMAIL.TYPE_MISMATCH',
 };

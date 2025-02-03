@@ -20,20 +20,20 @@
 import React, {useEffect, useRef, useState} from 'react';
 
 import {BackendError, BackendErrorLabel} from '@wireapp/api-client/lib/http';
-import {FormattedMessage, useIntl} from 'react-intl';
+import {FormattedMessage} from 'react-intl';
 import {connect} from 'react-redux';
 import {AnyAction, Dispatch} from 'redux';
 
 import {ValidationUtil} from '@wireapp/commons';
 import {Button, Checkbox, CheckboxLabel, Form, Input, Small} from '@wireapp/react-ui-kit';
 
-import {KEY} from 'Util/KeyboardUtil';
+import {handleEnterDown} from 'Util/KeyboardUtil';
+import {t} from 'Util/LocalizerUtil';
 import {getLogger} from 'Util/Logger';
 
 import {Exception} from './Exception';
 
 import {Config} from '../../Config';
-import {accountFormStrings} from '../../strings';
 import {actionRoot as ROOT_ACTIONS} from '../module/action/';
 import {ValidationError} from '../module/action/ValidationError';
 import {RootState, bindActionCreators} from '../module/reducer';
@@ -49,8 +49,6 @@ interface Props extends React.HTMLProps<HTMLFormElement> {
 }
 
 const AccountFormComponent = ({account, ...props}: Props & ConnectedProps & DispatchProps) => {
-  const {formatMessage: _} = useIntl();
-
   const [registrationData, setRegistrationData] = useState({
     accent_id: AccentColor.STRONG_BLUE.id,
     email: '',
@@ -169,12 +167,8 @@ const AccountFormComponent = ({account, ...props}: Props & ConnectedProps & Disp
           markInvalid={!validInputs.name}
           value={registrationData.name}
           autoComplete="section-create-team username"
-          placeholder={_(accountFormStrings.namePlaceholder)}
-          onKeyDown={(event: React.KeyboardEvent<HTMLInputElement>) => {
-            if (event.key === KEY.ENTER) {
-              inputs.email.current?.focus();
-            }
-          }}
+          placeholder={t('accountForm.namePlaceholder')}
+          onKeyDown={event => handleEnterDown(event, () => inputs.email.current?.focus())}
           maxLength={64}
           minLength={2}
           pattern=".{2,64}"
@@ -194,16 +188,10 @@ const AccountFormComponent = ({account, ...props}: Props & ConnectedProps & Disp
           markInvalid={!validInputs.email}
           value={registrationData.email}
           autoComplete="section-create-team email"
-          placeholder={_(
-            props.isPersonalFlow
-              ? accountFormStrings.emailPersonalPlaceholder
-              : accountFormStrings.emailTeamPlaceholder,
+          placeholder={t(
+            props.isPersonalFlow ? 'accountForm.emailPersonalPlaceholder' : 'accountForm.emailTeamPlaceholder',
           )}
-          onKeyDown={(event: React.KeyboardEvent<HTMLInputElement>) => {
-            if (event.key === KEY.ENTER) {
-              inputs.password.current?.focus();
-            }
-          }}
+          onKeyDown={event => handleEnterDown(event, () => inputs.password.current?.focus())}
           maxLength={128}
           type="email"
           required
@@ -223,7 +211,7 @@ const AccountFormComponent = ({account, ...props}: Props & ConnectedProps & Disp
           value={registrationData.password}
           autoComplete="section-create-team new-password"
           type="password"
-          placeholder={_(accountFormStrings.passwordPlaceholder)}
+          placeholder={t('accountForm.passwordPlaceholder')}
           pattern={ValidationUtil.getNewPasswordPattern(Config.getConfig().NEW_PASSWORD_MINIMUM_LENGTH)}
           required
           data-uie-name="enter-password"
@@ -237,7 +225,7 @@ const AccountFormComponent = ({account, ...props}: Props & ConnectedProps & Disp
           }}
           data-uie-name="element-password-help"
         >
-          {_(accountFormStrings.passwordHelp, {minPasswordLength: Config.getConfig().NEW_PASSWORD_MINIMUM_LENGTH})}
+          {t('accountForm.passwordHelp', {minPasswordLength: String(Config.getConfig().NEW_PASSWORD_MINIMUM_LENGTH)})}
         </Small>
 
         <Exception errors={[props.authError, ...validationErrors]} />
@@ -262,7 +250,7 @@ const AccountFormComponent = ({account, ...props}: Props & ConnectedProps & Disp
         <CheckboxLabel htmlFor="accept">
           {Config.getConfig().FEATURE.ENABLE_ACCOUNT_REGISTRATION_ACCEPT_TERMS_AND_PRIVACY_POLICY ? (
             <FormattedMessage
-              {...accountFormStrings.termsAndPrivacyPolicy}
+              id="accountForm.termsAndPrivacyPolicy"
               values={{
                 privacypolicy: (...chunks: string[] | React.ReactNode[]) => (
                   <a
@@ -292,7 +280,7 @@ const AccountFormComponent = ({account, ...props}: Props & ConnectedProps & Disp
             />
           ) : (
             <FormattedMessage
-              {...accountFormStrings.terms}
+              id="accountForm.terms"
               values={{
                 terms: (...chunks: string[] | React.ReactNode[]) => (
                   <a
@@ -328,7 +316,7 @@ const AccountFormComponent = ({account, ...props}: Props & ConnectedProps & Disp
         style={{margin: '16px auto'}}
         data-uie-name="do-next"
       >
-        {props.submitText || _(accountFormStrings.submitButton)}
+        {props.submitText || t('accountForm.submitButton')}
       </Button>
     </Form>
   );

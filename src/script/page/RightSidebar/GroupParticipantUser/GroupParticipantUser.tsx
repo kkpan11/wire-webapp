@@ -26,13 +26,13 @@ import {amplify} from 'amplify';
 import {WebAppEvents} from '@wireapp/webapp-events';
 
 import {FadingScrollbar} from 'Components/FadingScrollbar';
-import {Icon} from 'Components/Icon';
+import * as Icon from 'Components/Icon';
 import {EnrichedFields} from 'Components/panel/EnrichedFields';
 import {UserActions, Actions} from 'Components/panel/UserActions';
 import {UserDetails} from 'Components/panel/UserDetails';
 import {BaseToggle} from 'Components/toggle/BaseToggle';
 import {useKoSubscribableChildren} from 'Util/ComponentUtil';
-import {handleKeyDown} from 'Util/KeyboardUtil';
+import {handleKeyDown, KEY} from 'Util/KeyboardUtil';
 import {t} from 'Util/LocalizerUtil';
 
 import {ConversationRoleRepository} from '../../../conversation/ConversationRoleRepository';
@@ -77,10 +77,10 @@ const GroupParticipantUser: FC<GroupParticipantUserProps> = ({
 }) => {
   const {isGroup, roles} = useKoSubscribableChildren(activeConversation, ['isGroup', 'roles']);
   const {isTemporaryGuest, isAvailable} = useKoSubscribableChildren(currentUser, ['isTemporaryGuest', 'isAvailable']);
-  const {classifiedDomains, isTeam, team} = useKoSubscribableChildren(teamState, [
+  const {classifiedDomains, team, isTeam} = useKoSubscribableChildren(teamState, [
     'classifiedDomains',
-    'isTeam',
     'team',
+    'isTeam',
   ]);
   const {isActivatedAccount} = useKoSubscribableChildren(selfUser, ['isActivatedAccount']);
 
@@ -95,7 +95,7 @@ const GroupParticipantUser: FC<GroupParticipantUserProps> = ({
     }
 
     const newRole = isAdmin ? DefaultRole.WIRE_MEMBER : DefaultRole.WIRE_ADMIN;
-    await conversationRoleRepository.setMemberConversationRole(activeConversation, currentUser.id, newRole);
+    await conversationRoleRepository.setMemberConversationRole(activeConversation, currentUser.qualifiedId, newRole);
 
     roles[currentUser.id] = newRole;
     activeConversation.roles(roles);
@@ -124,10 +124,10 @@ const GroupParticipantUser: FC<GroupParticipantUserProps> = ({
   }, [currentUser]);
 
   useEffect(() => {
-    if (isTeam) {
-      teamRepository.updateTeamMembersByIds(team, [currentUser.id], true);
+    if (team.id) {
+      teamRepository.updateTeamMembersByIds(team.id, [currentUser.id], true);
     }
-  }, [isTeam, currentUser, teamRepository, team]);
+  }, [currentUser, teamRepository, team]);
 
   useEffect(() => {
     if (isTemporaryGuest) {
@@ -163,7 +163,7 @@ const GroupParticipantUser: FC<GroupParticipantUserProps> = ({
               type="button"
             >
               <span className="panel__action-item__icon">
-                <Icon.Devices />
+                <Icon.DevicesIcon />
               </span>
 
               <span className="panel__action-item__text">{t('conversationDetailsActionDevices')}</span>
@@ -184,10 +184,16 @@ const GroupParticipantUser: FC<GroupParticipantUserProps> = ({
                 aria-label={t('accessibility.conversationDetailsActionGroupAdminLabel')}
                 aria-pressed={isAdmin}
                 onClick={toggleAdmin}
-                onKeyDown={(event: React.KeyboardEvent<HTMLElement>) => handleKeyDown(event, toggleAdmin)}
+                onKeyDown={(event: React.KeyboardEvent<HTMLElement>) =>
+                  handleKeyDown({
+                    event,
+                    callback: toggleAdmin,
+                    keys: [KEY.ENTER, KEY.SPACE],
+                  })
+                }
               >
                 <span className="panel__action-item__icon">
-                  <Icon.GroupAdmin />
+                  <Icon.GroupAdminIcon />
                 </span>
 
                 <BaseToggle
@@ -206,7 +212,13 @@ const GroupParticipantUser: FC<GroupParticipantUserProps> = ({
           </>
         )}
 
-        {!isTemporaryGuest && <EnrichedFields user={currentUser} showDomain={isFederated} />}
+        {!isTemporaryGuest && (
+          <EnrichedFields
+            user={currentUser}
+            showDomain={isFederated}
+            showAvailability={isTeam && teamState.isInTeam(currentUser)}
+          />
+        )}
 
         <UserActions
           user={currentUser}

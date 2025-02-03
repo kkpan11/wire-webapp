@@ -21,7 +21,6 @@ import React, {useEffect, useState} from 'react';
 
 import {BackendErrorLabel, SyntheticErrorLabel} from '@wireapp/api-client/lib/http/';
 import {ConsentType} from '@wireapp/api-client/lib/self/index';
-import {useIntl} from 'react-intl';
 import {connect} from 'react-redux';
 import {useNavigate} from 'react-router-dom';
 import {AnyAction, Dispatch} from 'redux';
@@ -39,11 +38,13 @@ import {
   Text,
 } from '@wireapp/react-ui-kit';
 
+import {StorageKey} from 'src/script/storage';
+import {t} from 'Util/LocalizerUtil';
+import {storeValue} from 'Util/StorageUtil';
 import {isBackendError} from 'Util/TypePredicateUtil';
 
 import {Page} from './Page';
 
-import {chooseHandleStrings} from '../../strings';
 import {AcceptNewsModal} from '../component/AcceptNewsModal';
 import {actionRoot as ROOT_ACTIONS} from '../module/action';
 import {bindActionCreators, RootState} from '../module/reducer';
@@ -64,7 +65,6 @@ const SetHandleComponent = ({
   isFetching,
   name,
 }: Props & ConnectedProps & DispatchProps) => {
-  const {formatMessage: _} = useIntl();
   const navigate = useNavigate();
   const [error, setError] = useState(null);
   const [handle, setHandle] = useState('');
@@ -107,6 +107,16 @@ const SetHandleComponent = ({
     setHandle(event.target.value);
   };
 
+  const handleAcceptNewletterConsent = () => {
+    void updateConsent(ConsentType.MARKETING, 1);
+    storeValue(StorageKey.INITIAL_MAKRETING_CONSENT_ACCEPTED, true);
+  };
+
+  const handleDeclineNewletterConsent = () => {
+    void updateConsent(ConsentType.MARKETING, 0);
+    storeValue(StorageKey.INITIAL_MAKRETING_CONSENT_ACCEPTED, false);
+  };
+
   if (hasSelfHandle) {
     return null;
   }
@@ -114,8 +124,8 @@ const SetHandleComponent = ({
   return (
     <Page>
       <ContainerXS centerText verticalCenter style={{display: 'flex', flexDirection: 'column', minHeight: 428}}>
-        <H1 center>{_(chooseHandleStrings.headline)}</H1>
-        <Muted center>{_(chooseHandleStrings.subhead)}</Muted>
+        <H1 center>{t('chooseHandle.headline')}</H1>
+        <Muted center>{t('chooseHandle.subhead')}</Muted>
         <Form style={{marginTop: 30}} onSubmit={onSetHandle}>
           <InputBlock>
             <InputSubmitCombo style={{paddingLeft: 0}}>
@@ -125,7 +135,7 @@ const SetHandleComponent = ({
               <Input
                 id="handle"
                 name="handle"
-                placeholder={_(chooseHandleStrings.handlePlaceholder)}
+                placeholder={t('chooseHandle.handlePlaceholder')}
                 type="text"
                 onChange={onHandleChange}
                 value={handle}
@@ -145,10 +155,7 @@ const SetHandleComponent = ({
         {error && parseError(error)}
       </ContainerXS>
       {!isFetching && hasUnsetMarketingConsent && (
-        <AcceptNewsModal
-          onConfirm={() => updateConsent(ConsentType.MARKETING, 1)}
-          onDecline={() => updateConsent(ConsentType.MARKETING, 0)}
-        />
+        <AcceptNewsModal onConfirm={handleAcceptNewletterConsent} onDecline={handleDeclineNewletterConsent} />
       )}
     </Page>
   );

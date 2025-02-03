@@ -19,6 +19,7 @@
 
 import {act, render, waitFor} from '@testing-library/react';
 import {FeatureStatus, FEATURE_KEY, FeatureList} from '@wireapp/api-client/lib/team/feature';
+import {Runtime} from '@wireapp/commons/lib/util/Runtime';
 
 import {PrimaryModal} from 'Components/Modals/PrimaryModal';
 import en from 'I18n/en-US.json';
@@ -36,6 +37,8 @@ describe('FeatureConfigChangeNotifier', () => {
   beforeEach(() => {
     showModalSpy.mockClear();
     localStorage.clear();
+    jest.spyOn(Runtime, 'isDesktopApp').mockReturnValue(true);
+    jest.spyOn(Runtime, 'isWindows').mockReturnValue(true);
   });
 
   const baseConfig: FeatureList = {
@@ -50,6 +53,7 @@ describe('FeatureConfigChangeNotifier', () => {
       config: {enforcedTimeoutSeconds: 0},
     },
     [FEATURE_KEY.CONFERENCE_CALLING]: {
+      config: {useSFTForOneToOneCalls: false},
       status: FeatureStatus.DISABLED,
     },
     [FEATURE_KEY.CONVERSATION_GUEST_LINKS]: {
@@ -80,8 +84,8 @@ describe('FeatureConfigChangeNotifier', () => {
     ],
     [
       FEATURE_KEY.ENFORCE_DOWNLOAD_PATH,
-      'Enforced Download Path is enabled. The App will restart for the new settings to take effect.',
-      'Enforced Download Path is disabled. You will need to restart the app if you want to save downloads in a new location.',
+      'You’ll find your downloaded files now in a specific standard location on your Windows computer. The app needs a restart for the new setting to take effect.',
+      'Standard file location on Windows computers is disabled. Restart the app to save downloaded files in a new location.',
     ],
   ] as const)('shows a modal when feature %s is turned on and off', async (feature, enabledString, disabledString) => {
     const teamState = new TeamState();
@@ -95,6 +99,7 @@ describe('FeatureConfigChangeNotifier', () => {
         ...baseConfig,
         [feature]: {
           status: FeatureStatus.ENABLED,
+          ...(feature === FEATURE_KEY.ENFORCE_DOWNLOAD_PATH && {config: {enforcedDownloadLocation: 'dlpath'}}),
         },
       });
     });
@@ -116,6 +121,7 @@ describe('FeatureConfigChangeNotifier', () => {
         ...baseConfig,
         [feature]: {
           status: FeatureStatus.DISABLED,
+          ...(feature === FEATURE_KEY.ENFORCE_DOWNLOAD_PATH && {config: {enforcedDownloadLocation: ''}}),
         },
       });
     });
@@ -196,6 +202,7 @@ describe('FeatureConfigChangeNotifier', () => {
         expect(showModalSpy).toHaveBeenCalledWith(PrimaryModal.type.ACKNOWLEDGE, {
           hideCloseBtn: false,
           primaryAction: undefined,
+          preventClose: false,
           text: expect.objectContaining({
             htmlMessage: expectedText,
           }),

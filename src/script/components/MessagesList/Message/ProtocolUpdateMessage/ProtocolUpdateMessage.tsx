@@ -19,7 +19,7 @@
 
 import {ConversationProtocol} from '@wireapp/api-client/lib/conversation';
 
-import {Icon} from 'Components/Icon';
+import * as Icon from 'Components/Icon';
 import {Config} from 'src/script/Config';
 import {ProtocolUpdateMessage as ProtocolUpdateMessageEntity} from 'src/script/entity/message/ProtocolUpdateMessage';
 import {SystemMessage} from 'src/script/entity/message/SystemMessage';
@@ -40,21 +40,25 @@ const createSystemMessage = (caption: string) => {
 export const ProtocolUpdateMessage = ({message}: ProtocolUpdateMessageProps) => {
   if (message.protocol === ConversationProtocol.MIXED) {
     const captions = [
-      t('conversationProtocolUpdatedToMixedPart1', {}, replaceLink(Config.getConfig().URL.SUPPORT.MLS_LEARN_MORE)),
+      t(
+        'conversationProtocolUpdatedToMixedPart1',
+        undefined,
+        replaceLink(Config.getConfig().URL.SUPPORT.MLS_LEARN_MORE),
+      ),
       t('conversationProtocolUpdatedToMixedPart2'),
     ];
     const messages = captions.map(createSystemMessage);
     return (
       <>
         {messages.map(message => (
-          <SystemMessageBase key={message.caption} icon={<Icon.Info />} message={message} />
+          <SystemMessageBase key={message.caption} icon={<Icon.InfoIcon />} message={message} />
         ))}
       </>
     );
   }
 
   const migratedToMLSMessage = createSystemMessage(
-    t('conversationProtocolUpdatedToMLS', {}, replaceLink(Config.getConfig().URL.SUPPORT.MLS_LEARN_MORE)),
+    t('conversationProtocolUpdatedToMLS', undefined, replaceLink(Config.getConfig().URL.SUPPORT.MLS_LEARN_MORE)),
   );
-  return <SystemMessageBase message={migratedToMLSMessage} icon={<Icon.Info />} />;
+  return <SystemMessageBase message={migratedToMLSMessage} icon={<Icon.InfoIcon />} />;
 };

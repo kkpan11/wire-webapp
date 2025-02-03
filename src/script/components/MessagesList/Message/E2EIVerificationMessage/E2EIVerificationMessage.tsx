@@ -19,7 +19,7 @@
 
 import {Link, LinkVariant, MLSVerified} from '@wireapp/react-ui-kit';
 
-import {Icon} from 'Components/Icon';
+import * as Icon from 'Components/Icon';
 import {useKoSubscribableChildren} from 'Util/ComponentUtil';
 import {replaceLink, t} from 'Util/LocalizerUtil';
 import {getLogger} from 'Util/Logger';
@@ -80,22 +80,15 @@ export const E2EIVerificationMessage = ({message, conversation}: E2EIVerificatio
   const isNewMember = messageType === E2EIVerificationMessageType.NEW_MEMBER;
   const isExpired = messageType === E2EIVerificationMessageType.EXPIRED;
   const isRevoked = messageType === E2EIVerificationMessageType.REVOKED;
+  const isNoLongerVerified = messageType === E2EIVerificationMessageType.NO_LONGER_VERIFIED;
 
   const learnMoreReplacement = replaceLink(Config.getConfig().URL.SUPPORT.E2EI_VERIFICATION);
 
   const getCertificate = async () => {
     try {
-      await E2EIHandler.getInstance().enroll();
+      await E2EIHandler.getInstance().enroll({resetTimers: true});
     } catch (error) {
       logger.error('Failed to enroll user certificate: ', error);
-    }
-  };
-
-  const updateCertificate = async () => {
-    try {
-      await E2EIHandler.getInstance().attemptRenewal();
-    } catch (error) {
-      logger.error('Failed to renew user certificate: ', error);
     }
   };
 
@@ -105,7 +98,7 @@ export const E2EIVerificationMessage = ({message, conversation}: E2EIVerificatio
         {isVerified ? (
           <MLSVerified data-uie-name="conversation-title-bar-verified-icon" />
         ) : (
-          <Icon.Info css={IconInfo} />
+          <Icon.InfoIcon css={IconInfo} />
         )}
       </div>
 
@@ -117,7 +110,7 @@ export const E2EIVerificationMessage = ({message, conversation}: E2EIVerificatio
         {isVerified && (
           <span
             dangerouslySetInnerHTML={{
-              __html: t('conversation.AllE2EIDevicesVerified', {}, learnMoreReplacement),
+              __html: t('conversation.AllE2EIDevicesVerified', undefined, learnMoreReplacement),
             }}
           />
         )}
@@ -134,7 +127,7 @@ export const E2EIVerificationMessage = ({message, conversation}: E2EIVerificatio
               {t('conversation.E2EISelfUserCertificateExpired')}
 
               <LinkText
-                onClick={updateCertificate}
+                onClick={getCertificate}
                 dataUieName="update-certificate"
                 label={t('conversation.E2EIUpdateCertificate')}
               />
@@ -189,10 +182,18 @@ export const E2EIVerificationMessage = ({message, conversation}: E2EIVerificatio
           ) : (
             <span
               dangerouslySetInnerHTML={{
-                __html: t('conversation.E2EISelfUserCertificateRevoked', {}, learnMoreReplacement),
+                __html: t('conversation.E2EISelfUserCertificateRevoked', undefined, learnMoreReplacement),
               }}
             />
           ))}
+
+        {isNoLongerVerified && (
+          <span
+            dangerouslySetInnerHTML={{
+              __html: t('conversation.E2EICertificateNoLongerVerifiedGeneric', undefined, learnMoreReplacement),
+            }}
+          />
+        )}
       </div>
     </div>
   );

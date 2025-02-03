@@ -28,10 +28,12 @@ import {noop} from 'Util/util';
 import {createUuid} from 'Util/uuid';
 import {WebWorker} from 'Util/worker';
 
+import {Filename} from './Backup.types';
 import {BackUpHeader, DecodedHeader, ENCRYPTED_BACKUP_FORMAT, ENCRYPTED_BACKUP_VERSION} from './BackUpHeader';
-import {BackupRepository, Filename} from './BackupRepository';
+import {BackupRepository} from './BackupRepository';
 import {BackupService} from './BackupService';
 import {CancelError, DifferentAccountError, IncompatiblePlatformError} from './Error';
+import {createMetaData} from './LegacyBackup.helper';
 import {handleZipEvent} from './zipWorker';
 
 import {User} from '../entity/User';
@@ -84,6 +86,7 @@ async function buildBackupRepository() {
     .mockImplementation(conversations => conversations.map(c => generateConversation({type: c.type, overwites: c})));
   jest.spyOn(conversationRepository, 'updateConversationStates');
   jest.spyOn(conversationRepository, 'updateConversations');
+  jest.spyOn(conversationRepository, 'syncDeletedConversations').mockResolvedValue(undefined);
   return [
     new BackupRepository(backupService, conversationRepository),
     {backupService, conversationRepository, storageService},
@@ -97,14 +100,14 @@ describe('BackupRepository', () => {
 
   describe('createMetaData', () => {
     it('creates backup metadata', async () => {
-      const [backupRepository, {backupService}] = await buildBackupRepository();
+      const [, {backupService}] = await buildBackupRepository();
       jest.useFakeTimers();
       const freezedTime = new Date();
       jest.setSystemTime(freezedTime);
       const userId = createUuid();
       const clientId = createUuid();
 
-      const metaDescription = backupRepository.createMetaData(new User(userId), clientId);
+      const metaDescription = createMetaData(new User(userId), clientId, backupService);
 
       expect(metaDescription.client_id).toBe(clientId);
       expect(metaDescription.creation_time).toBe(freezedTime.toISOString());
@@ -174,9 +177,9 @@ describe('BackupRepository', () => {
         },
       ],
     ])(`fails if metadata doesn't match`, async ({metaChanges, expectedError}) => {
-      const [backupRepository] = await buildBackupRepository();
+      const [backupRepository, {backupService}] = await buildBackupRepository();
 
-      const meta = {...backupRepository.createMetaData(new User('user1'), 'client1'), ...metaChanges};
+      const meta = {...createMetaData(new User('user1'), 'client1', backupService), ...metaChanges};
 
       const files = {
         [Filename.METADATA]: JSON.stringify(meta),
@@ -194,7 +197,7 @@ describe('BackupRepository', () => {
       const importSpy = jest.spyOn(backupService, 'importEntities').mockResolvedValue(1);
       const users = [generateAPIUser(), generateAPIUser()];
 
-      const metadata = {...backupRepository.createMetaData(user, 'client1'), version: mockedDBVersion};
+      const metadata = {...createMetaData(user, 'client1', backupService), version: mockedDBVersion};
 
       const conversation = generateConversation({
         id: {id: 'conversation1', domain: 'staging2'},
@@ -279,7 +282,7 @@ describe('BackupRepository', () => {
       expect(mockGenerateChaCha20Key).toHaveBeenCalledWith(decodedHeader);
     });
 
-    test('compressHistoryFiles does not call the encryption function if no password is provided', async () => {
+    it('compressHistoryFiles does not call the encryption function if no password is provided', async () => {
       // Mocked values
       const password = '';
       const clientId = 'ClientId';
@@ -298,7 +301,8 @@ describe('BackupRepository', () => {
       expect(mockEncodeHeader).not.toHaveBeenCalled();
       expect(mockGenerateChaCha20Key).not.toHaveBeenCalled();
     });
-    test('compressHistoryFiles returns a Blob object with the correct type', async () => {
+
+    it('compressHistoryFiles returns a Blob object with the correct type', async () => {
       // Mocked values...
       const password = 'Password';
       const clientId = 'ClientId';

@@ -18,6 +18,12 @@
  */
 
 export const Segmentation = {
+  APP_OPEN: {
+    DESKTOP_APP: 'app_desktop_app',
+    APP_VERSION: 'app_version',
+    OS_VERSION: 'os_version',
+    IS_TEAM_MEMBER: 'is_team_member',
+  },
   CALL: {
     AV_SWITCH_TOGGLE: 'call_av_switch_toggle',
     DIRECTION: 'call_direction',
@@ -26,13 +32,17 @@ export const Segmentation = {
     PARTICIPANTS: 'call_participants',
     REASON: 'reason', // This has to be in sync with ios
     SCREEN_SHARE: 'call_screen_share',
+    SCORE: 'score',
+    QUALITY_REVIEW_LABEL: 'label',
     SETUP_TIME: 'call_setup_time',
     VIDEO: 'call_video',
   },
   COMMON: {
-    APP: 'app_name',
-    APP_VERSION: 'app_version',
-    DESKTOP_APP: 'app_desktop_app',
+    TEAM_IS_ENTERPRISE: 'team_is_enterprise',
+    TEAM_TEAM_ID: 'team_team_id',
+    TEAM_TEAM_SIZE: 'team_team_size',
+    TEAM_USER_TYPE: 'team_user_type',
+    USER_CONTACTS: 'user_contacts',
   },
   CONVERSATION: {
     ALLOW_GUESTS: 'conversation_allow_guests',
@@ -50,8 +60,38 @@ export const Segmentation = {
     IS_REPLY: 'message_is_reply',
     MENTION: 'message_mention',
   },
+  IS_RICH_TEXT: 'is_rich_text',
   SCREEN_SHARE: {
     DIRECTION: 'screen_share_direction',
     DURATION: 'screen_share_duration',
+  },
+  CALLING_UI_SIZE: {
+    FROM: 'from',
+    TO: 'to',
+  },
+  BACKUP_CREATION: {
+    PASSWORD: 'password',
+    PASSWORD_MULTIPLE_ATTEMPTS: 'password_multiple_attempts',
+    CREATION_DURATION: 'creation_duration',
+    CANCELLATION_STEP: {
+      DURING_BACKUP: 'during_backup',
+      BEFORE_BACKUP: 'before_backup',
+    },
+  },
+  GENERAL: {
+    STEP: 'step',
+    YES: 'yes',
+    NO: 'no',
+  },
+  TEAM_CREATION_STEP: {
+    CLICKED_CREATE_TEAM: 'clicked_create_team',
+    CLICKED_DISMISS_CTA: 'clicked_dismiss_cta',
+    MODAL_DISCLAIMERS: 'modal_disclaimers',
+    MODAL_TEAM_NAME: 'modal_team_name',
+    MODAL_CONFIRMATION: 'modal_confirmation',
+    MODAL_LEAVE_CLICKED: 'modal_leave_clicked',
+    MODAL_CONTINUE_CLICKED: 'modal_continue_clicked',
+    MODAL_BACK_TO_WIRE_CLICKED: 'modal_back_to_wire_clicked',
+    MODAL_OPEN_TM_CLICKED: 'modal_open_tm_clicked',
   },
 };

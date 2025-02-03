@@ -20,15 +20,12 @@
 import {useEffect, useRef, useState} from 'react';
 
 import {BackendErrorLabel} from '@wireapp/api-client/lib/http';
-import {amplify} from 'amplify';
 import {StatusCodes as HTTP_STATUS} from 'http-status-codes';
 import {partition} from 'underscore';
+import {useDebouncedCallback} from 'use-debounce';
 
-import {WebAppEvents} from '@wireapp/webapp-events';
-
-import {Icon} from 'Components/Icon';
+import * as Icon from 'Components/Icon';
 import {UserList, UserlistMode} from 'Components/UserList';
-import {Conversation} from 'src/script/entity/Conversation';
 import {UserRepository} from 'src/script/user/UserRepository';
 import {t} from 'Util/LocalizerUtil';
 import {getLogger} from 'Util/Logger';
@@ -36,24 +33,20 @@ import {safeWindowOpen} from 'Util/SanitizationUtil';
 import {sortByPriority} from 'Util/StringUtil';
 import {isBackendError} from 'Util/TypePredicateUtil';
 
-import {GroupList} from './components/GroupList';
 import {TopPeople} from './components/TopPeople';
 
 import {ConversationRepository} from '../../../../conversation/ConversationRepository';
 import {ConversationState} from '../../../../conversation/ConversationState';
 import {User} from '../../../../entity/User';
 import {getManageTeamUrl} from '../../../../externalRoute';
-import {useDebounce} from '../../../../hooks/useDebounce';
 import {SearchRepository} from '../../../../search/SearchRepository';
 import {TeamRepository} from '../../../../team/TeamRepository';
 import {TeamState} from '../../../../team/TeamState';
 import {UserState} from '../../../../user/UserState';
 
-export type SearchResultsData = {contacts: User[]; groups: Conversation[]; others: User[]};
+export type SearchResultsData = {contacts: User[]; others: User[]};
 
 interface PeopleTabProps {
-  canCreateGroupConversation: boolean;
-  canCreateGuestRoom: boolean;
   canInviteTeamMembers: boolean;
   canSearchUnconnectedUsers: boolean;
   conversationRepository: ConversationRepository;
@@ -61,7 +54,6 @@ interface PeopleTabProps {
   isFederated: boolean;
   isTeam: boolean;
   onClickContact: (user: User) => void;
-  onClickConversation: (conversation: Conversation) => void;
   onClickUser: (user: User) => void;
   onSearchResults: (results: SearchResultsData | undefined) => void;
   searchQuery: string;
@@ -83,14 +75,11 @@ export const PeopleTab = ({
   selfUser,
   canInviteTeamMembers,
   canSearchUnconnectedUsers,
-  canCreateGroupConversation,
-  canCreateGuestRoom,
   conversationState,
   searchRepository,
   conversationRepository,
   userRepository,
   onClickContact,
-  onClickConversation,
   onClickUser,
   onSearchResults,
 }: PeopleTabProps) => {
@@ -125,9 +114,9 @@ export const PeopleTab = ({
     return contacts.filter(user => user.isAvailable());
   };
 
-  const [results, setResults] = useState<SearchResultsData>({contacts: getLocalUsers(), groups: [], others: []});
+  const [results, setResults] = useState<SearchResultsData>({contacts: getLocalUsers(), others: []});
   const searchOnFederatedDomain = () => '';
-  const hasResults = results.contacts.length + results.groups.length + results.others.length > 0;
+  const hasResults = results.contacts.length + results.others.length > 0;
 
   const manageTeamUrl = getManageTeamUrl('client_landing');
 
@@ -167,62 +156,61 @@ export const PeopleTab = ({
     }
   }, []);
 
-  useDebounce(
-    async () => {
-      setHasFederationError(false);
-      const {query, isHandleQuery} = searchRepository.normalizeQuery(searchQuery);
-      if (!query) {
-        setResults({contacts: getLocalUsers(), groups: [], others: []});
-        onSearchResults(undefined);
-        return;
-      }
-      const localSearchSources = getLocalUsers(true);
+  const debouncedSearch = useDebouncedCallback(async () => {
+    setHasFederationError(false);
+    const {query} = searchRepository.normalizeQuery(searchQuery);
+    if (!query) {
+      setResults({contacts: getLocalUsers(), others: []});
+      onSearchResults(undefined);
+      return;
+    }
+    const localSearchSources = getLocalUsers(true);
 
-      const contactResults = searchRepository.searchUserInSet(searchQuery, localSearchSources);
-      const filteredResults = contactResults.filter(
-        user =>
-          conversationState.hasConversationWith(user) ||
-          teamRepository.isSelfConnectedTo(user.id) ||
-          user.username() === query,
-      );
+    const contactResults = searchRepository.searchUserInSet(searchQuery, localSearchSources);
+    const filteredResults = contactResults.filter(
+      user =>
+        conversationState.hasConversationWith(user) ||
+        teamRepository.isSelfConnectedTo(user.id) ||
+        user.username() === query,
+    );
 
-      const localSearchResults: SearchResultsData = {
-        contacts: filteredResults,
-        groups: conversationRepository.getGroupsByName(query, isHandleQuery),
-        others: [],
-      };
-      setResults(localSearchResults);
-      onSearchResults(localSearchResults);
-      if (canSearchUnconnectedUsers) {
-        try {
-          const userEntities = await searchRepository.searchByName(searchQuery);
-          const localUserIds = localSearchResults.contacts.map(({id}) => id);
-          const onlyRemoteUsers = userEntities.filter(user => !localUserIds.includes(user.id));
-          const results = inTeam
-            ? await organizeTeamSearchResults(onlyRemoteUsers, localSearchResults, query)
-            : {...localSearchResults, others: onlyRemoteUsers};
+    const localSearchResults: SearchResultsData = {
+      contacts: filteredResults,
+      others: [],
+    };
+    setResults(localSearchResults);
+    onSearchResults(localSearchResults);
+    if (canSearchUnconnectedUsers) {
+      try {
+        const userEntities = await searchRepository.searchByName(searchQuery, selfUser.teamId);
+        const localUserIds = localSearchResults.contacts.map(({id}) => id);
+        const onlyRemoteUsers = userEntities.filter(user => !localUserIds.includes(user.id));
+        const results = inTeam
+          ? await organizeTeamSearchResults(onlyRemoteUsers, localSearchResults, query)
+          : {...localSearchResults, others: onlyRemoteUsers};
 
-          if (currentSearchQuery.current === searchQuery) {
-            // Only update the results if the query that has been processed correspond to the current search query
-            onSearchResults(results);
-            setResults(results);
-          }
-        } catch (error) {
-          if (isBackendError(error)) {
-            if (error.code === HTTP_STATUS.UNPROCESSABLE_ENTITY) {
-              return setHasFederationError(true);
-            }
-            if (error.code === HTTP_STATUS.BAD_REQUEST && error.label === BackendErrorLabel.FEDERATION_NOT_ALLOWED) {
-              return logger.warn(`Error searching for contacts: ${error.message}`);
-            }
-          }
-          logger.error(`Error searching for contacts: ${(error as any).message}`, error);
+        if (currentSearchQuery.current === searchQuery) {
+          // Only update the results if the query that has been processed correspond to the current search query
+          onSearchResults(results);
+          setResults(results);
         }
+      } catch (error) {
+        if (isBackendError(error)) {
+          if (error.code === HTTP_STATUS.UNPROCESSABLE_ENTITY) {
+            return setHasFederationError(true);
+          }
+          if (error.code === HTTP_STATUS.BAD_REQUEST && error.label === BackendErrorLabel.FEDERATION_NOT_ALLOWED) {
+            return logger.warn(`Error searching for contacts: ${error.message}`);
+          }
+        }
+        logger.error(`Error searching for contacts: ${(error as any).message}`, error);
       }
-    },
-    300,
-    [searchQuery],
-  );
+    }
+  }, 300);
+
+  useEffect(() => {
+    debouncedSearch();
+  }, [searchQuery]);
 
   useEffect(() => {
     // keep track of the most up to date value of the search query (in order to cancel outdated queries)
@@ -261,40 +249,6 @@ export const PeopleTab = ({
                 </button>
               </li>
             )}
-            {canCreateGroupConversation && (
-              <li className="left-list-item">
-                <button
-                  className="left-list-item-button"
-                  type="button"
-                  onClick={() => amplify.publish(WebAppEvents.CONVERSATION.CREATE_GROUP, 'start_ui')}
-                  data-uie-name="go-create-group"
-                >
-                  <span className="left-column-icon">
-                    <Icon.Group />
-                  </span>
-                  <span className="column-center">{t('searchCreateGroup')}</span>
-                </button>
-              </li>
-            )}
-            {canCreateGuestRoom && (
-              <li className="left-list-item">
-                <button
-                  className="left-list-item-button"
-                  type="button"
-                  onClick={() =>
-                    conversationRepository.createGuestRoom().then(conversation => {
-                      amplify.publish(WebAppEvents.CONVERSATION.SHOW, conversation, {});
-                    })
-                  }
-                  data-uie-name="do-create-guest-room"
-                >
-                  <span className="left-column-icon">
-                    <Icon.Guest />
-                  </span>
-                  <span className="column-center">{t('searchCreateGuestRoom')}</span>
-                </button>
-              </li>
-            )}
           </ul>
           {topPeople.length > 0 && (
             <div className="start-ui-list-top-people" data-uie-name="status-top-people">
@@ -313,7 +267,7 @@ export const PeopleTab = ({
           {!canSearchUnconnectedUsers ? (
             <div className="start-ui-no-search-results__content">
               <span className="start-ui-no-search-results__icon">
-                <Icon.Message />
+                <Icon.MessageIcon />
               </span>
               <p className="start-ui-no-search-results__text" data-uie-name="label-no-search-result">
                 {t('searchNoMatchesPartner')}
@@ -322,7 +276,7 @@ export const PeopleTab = ({
           ) : isFederated ? (
             <div className="start-ui-fed-wrapper">
               <span className="start-ui-fed-wrapper__icon">
-                <Icon.Profile />
+                <Icon.ProfileIcon />
               </span>
               <div className="start-ui-fed-wrapper__text">{t('searchTrySearchFederation')}</div>
               <div className="start-ui-fed-wrapper__button">
@@ -357,22 +311,13 @@ export const PeopleTab = ({
             </div>
           </div>
         )}
-        {results.groups.length > 0 && (
-          <div className="start-ui-groups">
-            {isTeam ? (
-              <h3 className="start-ui-list-header">{t('searchTeamGroups')}</h3>
-            ) : (
-              <h3 className="start-ui-list-header">{t('searchGroups')}</h3>
-            )}
-            <div className="group-list">
-              <GroupList groups={results.groups} click={onClickConversation} />
-            </div>
-          </div>
-        )}
+
         {results.others.length > 0 && (
           <div className="others">
             <h3 className="start-ui-list-header">
-              {searchOnFederatedDomain() ? t('searchOthersFederation', searchOnFederatedDomain()) : t('searchOthers')}
+              {searchOnFederatedDomain()
+                ? t('searchOthersFederation', {domainName: searchOnFederatedDomain()})
+                : t('searchOthers')}
             </h3>
             <div className="search-list-theme-black">
               <UserList

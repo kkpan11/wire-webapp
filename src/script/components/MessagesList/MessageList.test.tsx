@@ -36,6 +36,9 @@ const getDefaultParams = (): React.ComponentProps<typeof MessagesList> => {
   return {
     cancelConnectionRequest: jest.fn(),
     conversation,
+    assetRepository: {
+      processQueue: [],
+    } as any,
     conversationRepository: {
       expectReadReceipt: jest.fn(() => false),
       getMessagesWithOffset: jest.fn(),
@@ -44,9 +47,7 @@ const getDefaultParams = (): React.ComponentProps<typeof MessagesList> => {
       updateParticipatingUserEntities: jest.fn(),
     } as any,
     getVisibleCallback: jest.fn(),
-    initialMessage: undefined,
     invitePeople: jest.fn(),
-    isLastReceivedMessage: jest.fn(),
     messageActions: {
       deleteMessage: jest.fn(),
       deleteMessageEveryone: jest.fn(),
@@ -66,6 +67,7 @@ const getDefaultParams = (): React.ComponentProps<typeof MessagesList> => {
     isMsgElementsFocusable: true,
     setMsgElementsFocusable: jest.fn(),
     showMessageReactions: jest.fn(),
+    updateConversationLastRead: jest.fn(),
   };
 };
 

@@ -17,8 +17,13 @@
  *
  */
 
+import {amplify} from 'amplify';
+
+import {WebAppEvents} from '@wireapp/webapp-events';
+
 import {PrimaryModal} from 'Components/Modals/PrimaryModal';
 import {ModalOptions, PrimaryModalType} from 'Components/Modals/PrimaryModal/PrimaryModalTypes';
+import {Config} from 'src/script/Config';
 import {replaceLink, t} from 'Util/LocalizerUtil';
 
 const hideSecondaryBtn = {hideSecondary: true};
@@ -30,7 +35,9 @@ export enum ModalType {
   SUCCESS = 'success',
   LOADING = 'loading',
   CERTIFICATE_RENEWAL = 'certificate_renewal',
+  SELF_CERTIFICATE_REVOKED = 'self_certificate_revoked',
   SNOOZE_REMINDER = 'snooze_reminder',
+  DOWNLOAD_PATH_CHANGED = 'download_path_changed',
 }
 
 interface GetModalOptions {
@@ -73,14 +80,20 @@ export const getModalOptions = ({
       </svg>
   </div>
   `;
+
+  const gracePeriodOverParagraph = t('acme.settingsChanged.gracePeriodOver.paragraph', undefined, {
+    br: '<br>',
+    ...replaceLearnMore,
+  });
+
+  const settingsChangedParagraph = t('acme.settingsChanged.paragraph', undefined, {br: '<br>', ...replaceLearnMore});
+
   switch (type) {
     case ModalType.ENROLL:
       options = {
         text: {
           closeBtnLabel: t('acme.settingsChanged.button.close'),
-          htmlMessage: extraParams?.isGracePeriodOver
-            ? t('acme.settingsChanged.gracePeriodOver.paragraph', {}, {br: '<br>', ...replaceLearnMore})
-            : t('acme.settingsChanged.paragraph', {}, {br: '<br>', ...replaceLearnMore}),
+          htmlMessage: extraParams?.isGracePeriodOver ? gracePeriodOverParagraph : settingsChangedParagraph,
           title: t('acme.settingsChanged.headline.alt'),
         },
         primaryAction: {
@@ -102,8 +115,14 @@ export const getModalOptions = ({
         text: {
           closeBtnLabel: t('acme.renewCertificate.button.close'),
           htmlMessage: extraParams?.isGracePeriodOver
-            ? t('acme.renewCertificate.gracePeriodOver.paragraph')
-            : t('acme.renewCertificate.paragraph'),
+            ? // @ts-expect-error
+              // the "url" should be provided
+              // TODO: check it when changing this code
+              t('acme.renewCertificate.gracePeriodOver.paragraph')
+            : // @ts-expect-error
+              // the "url" should be provided
+              // TODO: check it when changing this code
+              t('acme.renewCertificate.paragraph'),
           title: t('acme.renewCertificate.headline.alt'),
         },
         primaryAction: {
@@ -120,11 +139,31 @@ export const getModalOptions = ({
         hideSecondary || secondaryActionFn === undefined ? PrimaryModal.type.ACKNOWLEDGE : PrimaryModal.type.CONFIRM;
       break;
 
+    case ModalType.SELF_CERTIFICATE_REVOKED:
+      options = {
+        text: {
+          htmlMessage: t('acme.selfCertificateRevoked.text'),
+          title: t('acme.selfCertificateRevoked.title'),
+        },
+        primaryAction: {
+          action: primaryActionFn,
+          text: t('acme.selfCertificateRevoked.button.primary'),
+        },
+        confirmCancelBtnLabel: t('acme.selfCertificateRevoked.button.cancel'),
+        allButtonsFullWidth: true,
+        primaryBtnFirst: true,
+      };
+      modalType = PrimaryModal.type.CONFIRM;
+      break;
+
     case ModalType.SNOOZE_REMINDER:
       options = {
         text: {
           closeBtnLabel: t('acme.settingsChanged.button.close'),
-          htmlMessage: t('acme.remindLater.paragraph', extraParams?.delayTime),
+          // @ts-expect-error
+          // the "url" should be provided
+          // TODO: check it when changing this code
+          htmlMessage: t('acme.remindLater.paragraph', {delayTime: extraParams?.delayTime}),
           title: t('acme.settingsChanged.headline.alt'),
         },
         primaryAction: {
@@ -142,8 +181,8 @@ export const getModalOptions = ({
         text: {
           closeBtnLabel: t('acme.error.button.close'),
           htmlMessage: extraParams?.isGracePeriodOver
-            ? t('acme.error.gracePeriod.paragraph', {}, {br: '<br>'})
-            : t('acme.error.paragraph', {}, {br: '<br>'}),
+            ? t('acme.error.gracePeriod.paragraph', undefined, {br: '<br>'})
+            : t('acme.error.paragraph', undefined, {br: '<br>'}),
           title: t('acme.error.headline'),
         },
         primaryAction: {
@@ -175,6 +214,9 @@ export const getModalOptions = ({
         text: {
           closeBtnLabel: t('acme.done.button.close'),
           htmlMessage: `<div style="text-align: center">${svgHtml}${
+            // @ts-expect-error
+            // the "url" should be provided
+            // TODO: check it when changing this code
             extraParams?.isRenewal ? t('acme.renewal.done.paragraph') : t('acme.done.paragraph')
           }</div>`,
           title: extraParams?.isRenewal ? t('acme.renewal.done.headline') : t('acme.done.headline'),
@@ -186,6 +228,26 @@ export const getModalOptions = ({
         secondaryAction: {
           action: secondaryActionFn,
           text: t('acme.done.button.secondary'),
+        },
+      };
+      modalType = PrimaryModal.type.ACKNOWLEDGE;
+      break;
+
+    case ModalType.DOWNLOAD_PATH_CHANGED:
+      options = {
+        hideCloseBtn: true,
+        preventClose: true,
+        text: {
+          htmlMessage: t('featureConfigChangeModalDownloadPathEnabled'),
+
+          title: t('featureConfigChangeModalDownloadPathHeadline', {
+            brandName: Config.getConfig().BRAND_NAME,
+          }),
+        },
+        primaryAction: {
+          action: () => {
+            amplify.publish(WebAppEvents.LIFECYCLE.RESTART);
+          },
         },
       };
       modalType = PrimaryModal.type.ACKNOWLEDGE;

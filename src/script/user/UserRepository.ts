@@ -52,7 +52,6 @@ import {matchQualifiedIds} from 'Util/QualifiedId';
 import {fixWebsocketString} from 'Util/StringUtil';
 import {isAxiosError, isBackendError} from 'Util/TypePredicateUtil';
 
-import {valueFromType} from './AvailabilityMapper';
 import {showAvailabilityModal} from './AvailabilityModal';
 import {ConsentValue} from './ConsentValue';
 import {UserMapper} from './UserMapper';
@@ -75,6 +74,7 @@ import {USER} from '../event/Client';
 import {EventRepository} from '../event/EventRepository';
 import type {EventSource} from '../event/EventSource';
 import type {PropertiesRepository} from '../properties/PropertiesRepository';
+import {PROPERTIES_TYPE} from '../properties/PropertiesType';
 import type {SelfService} from '../self/SelfService';
 import {UserRecord} from '../storage';
 import {TeamState} from '../team/TeamState';
@@ -196,7 +196,7 @@ export class UserRepository extends TypedEventEmitter<Events> {
    * @param selfUser the user currently logged in (will be excluded from fetch)
    * @param connections the connection to other users
    * @param conversations the conversation the user is part of (used to compute extra users that are part of those conversations but not directly connected to the user)
-   * @param extraUsers other users that would need to be loaded (team users usually that are not direct connections)
+   * @param extraUsers the users that should be loaded additionally
    */
   async loadUsers(
     selfUser: User,
@@ -216,40 +216,36 @@ export class UserRepository extends TypedEventEmitter<Events> {
     // the entries we get back will be used to feed the availabilities of those users
     const nonQualifiedUsers = await this.userService.clearNonQualifiedUsers();
 
-    const dbUsers = await this.userService.loadUserFromDb();
-    /* prior to April 2023, we were only storing the availability in the DB, we need to refetch those users */
-    const [localUsers, incompleteUsers] = partition(dbUsers, user => !!user.qualified_id);
-
-    // We can remove users that are not linked to any "known users" from the local database.
-    // Known users are the users that are part of the conversations or the connections (or some extra users)
-    const orphanUsers = localUsers.filter(
-      localUser => !users.find(user => matchQualifiedIds(user, localUser.qualified_id)),
-    );
-
-    for (const orphanUser of orphanUsers) {
-      await this.userService.removeUserFromDb(orphanUser.qualified_id);
-    }
+    const dbUsers = await this.userService.loadUsersFromDb();
 
     // The self user doesn't need to be re-fetched
     const usersToFetch = users.filter(user => !matchQualifiedIds(selfUser.qualifiedId, user));
 
     const {found, failed} = await this.fetchRawUsers(usersToFetch, selfUser.domain);
 
-    const userWithAvailability = found.map(user => {
-      const availability = incompleteUsers
-        .concat(nonQualifiedUsers)
-        .find(incompleteUser => incompleteUser.id === user.id);
+    const usersWithAvailability = found.map(user => {
+      const localUser = dbUsers.find(
+        dbUser => dbUser.id === user.id || matchQualifiedIds(dbUser.qualified_id, user.qualified_id),
+      );
 
-      if (availability) {
-        return {availability: availability.availability, ...user};
+      const userWithAvailability = [...dbUsers, ...nonQualifiedUsers].find(userRecord => userRecord.id === user.id);
+
+      const userWithEscapedDefaultName = this.replaceDeletedUserNameWithNameInDb(user, localUser);
+
+      if (userWithAvailability) {
+        return {
+          availability: userWithAvailability.availability,
+          ...userWithEscapedDefaultName,
+        };
       }
-      return user;
+
+      return userWithEscapedDefaultName;
     });
 
     // Save all new users to the database
-    await Promise.all(userWithAvailability.map(user => this.saveUserInDb(user)));
+    await Promise.all(usersWithAvailability.map(user => this.saveUserInDb(user)));
 
-    const mappedUsers = this.mapUserResponse(userWithAvailability, failed, dbUsers);
+    const mappedUsers = this.mapUserResponse(usersWithAvailability, failed, dbUsers);
 
     // Assign connections to users
     mappedUsers.forEach(user => {
@@ -337,6 +333,14 @@ export class UserRepository extends TypedEventEmitter<Events> {
    * Will update the user both in database and in memory.
    */
   private async updateUser(userId: QualifiedId, user: Partial<UserRecord>, isWebSocket = false): Promise<User> {
+    if (user.deleted && user.name) {
+      const dbUser = await this.userService.loadUserFromDb(userId);
+
+      if (dbUser && dbUser.name) {
+        user.name = dbUser.name;
+      }
+    }
+
     const selfUser = this.userState.self();
     const isSelfUser = matchQualifiedIds(userId, selfUser.qualifiedId);
     const userEntity = isSelfUser ? selfUser : await this.getUserById(userId);
@@ -385,13 +389,12 @@ export class UserRepository extends TypedEventEmitter<Events> {
       };
     });
 
-    this.logger.log(`Found locally stored clients for '${userIds.length}' users`, recipients);
     const userEntities = await this.getUsersById(userIds);
     userEntities.forEach(userEntity => {
       const clientEntities = recipients[userEntity.id];
       const tooManyClients = clientEntities.length > 8;
       if (tooManyClients) {
-        this.logger.warn(`Found '${clientEntities.length}' clients for '${userEntity.name()}'`);
+        this.logger.debug(`Found '${clientEntities.length}' clients for '${userEntity.name()}'`);
       }
       userEntity.devices(clientEntities);
     });
@@ -493,15 +496,10 @@ export class UserRepository extends TypedEventEmitter<Events> {
       return;
     }
     const hasAvailabilityChanged = availability !== selfUser.availability();
-    const newAvailabilityValue = valueFromType(availability);
     if (hasAvailabilityChanged) {
-      const oldAvailabilityValue = valueFromType(selfUser.availability());
-      this.logger.log(`Availability was changed from '${oldAvailabilityValue}' to '${newAvailabilityValue}'`);
       await this.updateUser(selfUser.qualifiedId, {availability});
       amplify.publish(WebAppEvents.TEAM.UPDATE_INFO);
       showAvailabilityModal(availability);
-    } else {
-      this.logger.log(`Availability was again set to '${newAvailabilityValue}'`);
     }
   };
 
@@ -594,7 +592,23 @@ export class UserRepository extends TypedEventEmitter<Events> {
     );
   }
 
-  private mapUserResponse(found: APIClientUser[], failed: QualifiedId[], dbUsers?: UserRecord[]): User[] {
+  // Replaces a deleted user name ("default") with the name from the local database.
+  private replaceDeletedUserNameWithNameInDb(user: APIClientUser, localUser?: UserRecord): UserRecord {
+    if (!user.deleted) {
+      return user;
+    }
+
+    if (localUser && localUser.name) {
+      return {
+        ...user,
+        name: localUser.name,
+      };
+    }
+
+    return {...user, name: t('deletedUser')};
+  }
+
+  private mapUserResponse(found: APIClientUser[], failed: QualifiedId[], dbUsers: UserRecord[]): User[] {
     const selfUser = this.userState.self();
 
     if (!selfUser) {
@@ -616,6 +630,7 @@ export class UserRepository extends TypedEventEmitter<Events> {
     });
 
     const mappedUsers = this.userMapper.mapUsersFromJson(found, selfDomain).concat(failedToLoad);
+
     if (this.teamState.isTeam()) {
       this.mapGuestStatus(mappedUsers);
     }
@@ -630,7 +645,9 @@ export class UserRepository extends TypedEventEmitter<Events> {
    */
   private async fetchUsers(userIds: QualifiedId[]): Promise<User[]> {
     const {found, failed} = await this.fetchRawUsers(userIds, this.userState.self().domain);
-    const users = this.mapUserResponse(found, failed);
+    const dbUsers = await this.userService.loadUsersFromDb();
+    const users = this.mapUserResponse(found, failed, dbUsers);
+
     let fetchedUserEntities = this.saveUsers(users);
     // If there is a difference then we most likely have a case with a suspended user
     const isAllUserIds = userIds.length === fetchedUserEntities.length;
@@ -708,6 +725,7 @@ export class UserRepository extends TypedEventEmitter<Events> {
     if (localOnly) {
       const deletedUser = new User(userId.id, userId.domain);
       deletedUser.isDeleted = true;
+      deletedUser.name(t('deletedUser'));
       return deletedUser;
     }
     try {
@@ -725,15 +743,50 @@ export class UserRepository extends TypedEventEmitter<Events> {
   }
 
   /**
+   * Will refetch supported protocols for the given user and (if they changed) update the local user entity.
+   * @param user - the user to fetch the supported protocols for
+   */
+  private async refreshUserSupportedProtocols(user: User): Promise<void> {
+    try {
+      const localSupportedProtocols = user.supportedProtocols();
+      const supportedProtocols = await this.userService.getUserSupportedProtocols(user.qualifiedId);
+
+      const haveSupportedProtocolsChanged =
+        !localSupportedProtocols ||
+        !(
+          localSupportedProtocols.length === supportedProtocols.length &&
+          [...localSupportedProtocols].every(protocol => supportedProtocols.includes(protocol))
+        );
+
+      if (!haveSupportedProtocolsChanged) {
+        return;
+      }
+
+      await this.updateUserSupportedProtocols(user.qualifiedId, supportedProtocols);
+      this.emit('supportedProtocolsUpdated', {user, supportedProtocols});
+    } catch (error) {
+      this.logger.warn(`Failed to refresh supported protocols for user ${user.qualifiedId.id}`, error);
+    }
+  }
+
+  /**
    * Check for supported protocols on user entity locally, otherwise fetch them from the backend.
    * @param userId - the user to fetch the supported protocols for
    * @param forceRefetch - if true, the supported protocols will be fetched from the backend even if they are already stored locally
    */
+  public async getUserSupportedProtocols(
+    userId: QualifiedId,
+    shouldRefreshUser = false,
+  ): Promise<ConversationProtocol[]> {
+    const localUser = this.findUserById(userId);
+    const localSupportedProtocols = localUser?.supportedProtocols();
 
-  public async getUserSupportedProtocols(userId: QualifiedId, forceRefetch = false): Promise<ConversationProtocol[]> {
-    const localSupportedProtocols = this.findUserById(userId)?.supportedProtocols();
+    if (shouldRefreshUser && localUser) {
+      // Trigger a refresh of the supported protocols in the background. No need to await for this one.
+      void this.refreshUserSupportedProtocols(localUser);
+    }
 
-    if (!forceRefetch && localSupportedProtocols) {
+    if (localSupportedProtocols) {
       return localSupportedProtocols;
     }
 
@@ -842,7 +895,7 @@ export class UserRepository extends TypedEventEmitter<Events> {
    */
   public readonly refreshAllKnownUsers = async (): Promise<void> => {
     const userIds = this.userState.users().map(user => user.qualifiedId);
-    await this.refreshUsers(userIds);
+    void this.refreshUsers(userIds);
   };
 
   /**
@@ -1004,7 +1057,7 @@ export class UserRepository extends TypedEventEmitter<Events> {
   private async initMarketingConsent(): Promise<void> {
     if (!Config.getConfig().FEATURE.CHECK_CONSENT) {
       this.logger.warn(
-        `Consent check feature is disabled. Defaulting to '${this.propertyRepository.marketingConsent()}'`,
+        `Consent check feature is disabled. Defaulting to '${this.propertyRepository.getPreference(PROPERTIES_TYPE.PRIVACY.MARKETING_CONSENT)}'`,
       );
       return;
     }
@@ -1015,14 +1068,10 @@ export class UserRepository extends TypedEventEmitter<Events> {
         const isMarketingConsent = consentType === ConsentType.MARKETING;
         if (isMarketingConsent) {
           const hasGivenConsent = consentValue === ConsentValue.GIVEN;
-          this.propertyRepository.marketingConsent(hasGivenConsent);
-
-          this.logger.log(`Marketing consent retrieved as '${consentValue}'`);
+          await this.propertyRepository.updateProperty(PROPERTIES_TYPE.PRIVACY.MARKETING_CONSENT, hasGivenConsent);
           return;
         }
       }
-
-      this.logger.log(`Marketing consent not set. Defaulting to '${this.propertyRepository.marketingConsent()}'`);
     } catch (error) {
       this.logger.warn(`Failed to retrieve marketing consent: ${error.message || error.code}`, error);
     }

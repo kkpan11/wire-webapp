@@ -30,7 +30,7 @@ interface Config {
   CONSTRAINTS: {
     SCREEN: {
       DESKTOP_CAPTURER: MediaTrackConstraints & {
-        mandatory: {chromeMediaSource: string; chromeMediaSourceId?: string; maxHeight: number; minHeight: number};
+        mandatory?: {chromeMediaSource: string; chromeMediaSourceId?: string; maxFrameRate?: number};
       };
       DISPLAY_MEDIA: MediaTrackConstraints;
       USER_MEDIA: MediaTrackConstraints & {mediaSource: string};
@@ -57,20 +57,14 @@ export class MediaConstraintsHandler {
           DESKTOP_CAPTURER: {
             mandatory: {
               chromeMediaSource: 'desktop',
-              maxHeight: 1080,
-              minHeight: 1080,
+              maxFrameRate: 5,
             },
           },
           DISPLAY_MEDIA: {
             frameRate: 5,
-            height: {
-              ideal: 1080,
-              max: 1080,
-            },
           },
           USER_MEDIA: {
             frameRate: 5,
-            height: {exact: 720},
             mediaSource: 'screen',
           },
         },
@@ -139,11 +133,13 @@ export class MediaConstraintsHandler {
   getScreenStreamConstraints(method: ScreensharingMethods): MediaStreamConstraints | undefined {
     switch (method) {
       case ScreensharingMethods.DESKTOP_CAPTURER:
-        this.logger.info('Enabling screen sharing from desktopCapturer');
+        this.logger.info(`Enabling screen sharing from desktopCapturer (with fULL resolution)`);
+
+        const desktopCapturer = MediaConstraintsHandler.CONFIG.CONSTRAINTS.SCREEN.DESKTOP_CAPTURER;
 
         const streamConstraints = {
           audio: false,
-          video: MediaConstraintsHandler.CONFIG.CONSTRAINTS.SCREEN.DESKTOP_CAPTURER,
+          video: desktopCapturer,
         };
 
         const chromeMediaSourceId = this.currentDeviceId.screeninput();
@@ -151,16 +147,22 @@ export class MediaConstraintsHandler {
 
         return streamConstraints;
       case ScreensharingMethods.DISPLAY_MEDIA:
-        this.logger.info('Enabling screen sharing from getDisplayMedia');
+        this.logger.info(`Enabling screen sharing from getDisplayMedia (with fULL resolution)`);
+
+        const display = MediaConstraintsHandler.CONFIG.CONSTRAINTS.SCREEN.DISPLAY_MEDIA;
+
         return {
           audio: false,
-          video: MediaConstraintsHandler.CONFIG.CONSTRAINTS.SCREEN.DISPLAY_MEDIA,
+          video: display,
         };
       case ScreensharingMethods.USER_MEDIA:
-        this.logger.info('Enabling screen sharing from getUserMedia');
+        this.logger.info(`Enabling screen sharing from getUserMedia (with fULL resolution)`);
+
+        const userMedia = MediaConstraintsHandler.CONFIG.CONSTRAINTS.SCREEN.USER_MEDIA;
+
         return {
           audio: false,
-          video: MediaConstraintsHandler.CONFIG.CONSTRAINTS.SCREEN.USER_MEDIA,
+          video: userMedia,
         };
       default:
         return undefined;

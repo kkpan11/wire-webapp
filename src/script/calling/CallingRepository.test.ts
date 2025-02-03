@@ -18,16 +18,15 @@
  */
 
 import {
-  ConversationProtocol,
   CONVERSATION_TYPE,
+  ConversationProtocol,
   DefaultConversationRoleName,
 } from '@wireapp/api-client/lib/conversation';
-import {QualifiedId} from '@wireapp/api-client/lib/user';
 import 'jsdom-worker';
-import ko, {Subscription} from 'knockout';
+import {Subscription} from 'knockout';
 import {container} from 'tsyringe';
 
-import {CONV_TYPE, CALL_TYPE, STATE as CALL_STATE, REASON, Wcall} from '@wireapp/avs';
+import {CALL_TYPE, CONV_TYPE, REASON, STATE as CALL_STATE, VIDEO_STATE, Wcall} from '@wireapp/avs';
 import {Runtime} from '@wireapp/commons';
 
 import {Call} from 'src/script/calling/Call';
@@ -45,32 +44,11 @@ import {createUuid} from 'Util/uuid';
 import {CALL_MESSAGE_TYPE} from './enum/CallMessageType';
 import {LEAVE_CALL_REASON} from './enum/LeaveCallReason';
 
+import {buildMediaDevicesHandler, createConversation, createSelfParticipant} from '../auth/util/test/TestUtil';
 import {CallingEvent} from '../event/CallingEvent';
 import {CALL} from '../event/Client';
-import {MediaDevicesHandler} from '../media/MediaDevicesHandler';
 import {Core} from '../service/CoreSingleton';
 import {UserRepository} from '../user/UserRepository';
-
-const createSelfParticipant = () => {
-  const selfUser = new User();
-  selfUser.isMe = true;
-  return new Participant(selfUser, 'client1');
-};
-
-const createConversation = (
-  type: CONVERSATION_TYPE = CONVERSATION_TYPE.ONE_TO_ONE,
-  protocol: ConversationProtocol = ConversationProtocol.PROTEUS,
-  conversationId: QualifiedId = {id: createUuid(), domain: ''},
-  groupId = 'group-id',
-) => {
-  const conversation = new Conversation(conversationId.id, conversationId.domain, protocol);
-  conversation.participating_user_ets.push(new User(createUuid()));
-  conversation.type(type);
-  if (protocol === ConversationProtocol.MLS) {
-    conversation.groupId = groupId;
-  }
-  return conversation;
-};
 
 describe('CallingRepository', () => {
   const testFactory = new TestFactory();
@@ -80,13 +58,6 @@ describe('CallingRepository', () => {
   const selfUser = new User(createUuid());
   selfUser.isMe = true;
   const clientId = createUuid();
-
-  const mediaDevices = {
-    audioinput: ko.pureComputed(() => 'test'),
-    audiooutput: ko.pureComputed(() => 'test'),
-    screeninput: ko.pureComputed(() => 'test'),
-    videoinput: ko.pureComputed(() => 'test'),
-  };
 
   beforeAll(() => {
     return testFactory.exposeCallingActors().then(injectedCallingRepository => {
@@ -118,24 +89,26 @@ describe('CallingRepository', () => {
       const selfClientId = callingRepository['selfClientId']!;
       const call = new Call(
         selfUserId,
-        conversation.qualifiedId,
+        conversation,
         CONV_TYPE.CONFERENCE,
         selfParticipant,
         CALL_TYPE.NORMAL,
-        {
-          currentAvailableDeviceId: mediaDevices,
-        } as unknown as MediaDevicesHandler,
+        buildMediaDevicesHandler(),
       );
+
+      call.state(CALL_STATE.MEDIA_ESTAB);
 
       conversation.roles({[senderUserId.id]: DefaultConversationRoleName.WIRE_ADMIN});
 
       callingRepository['conversationState'].conversations.push(conversation);
-      spyOn(callingRepository, 'findCall').and.returnValue(call);
+      callingRepository['callState'].calls([call]);
       spyOn(callingRepository, 'muteCall').and.callThrough();
       spyOn(wCall, 'recvMsg').and.callThrough();
 
       const event: CallingEvent = {
         content: {
+          emojis: {},
+          isHandUp: false,
           type: CALL_MESSAGE_TYPE.REMOTE_MUTE,
           version: '',
           data: {targets: {[selfUserId.domain]: {[selfUserId.id]: [selfClientId]}}},
@@ -162,24 +135,26 @@ describe('CallingRepository', () => {
       const selfClientId = callingRepository['selfClientId']!;
       const call = new Call(
         selfUserId,
-        conversation.qualifiedId,
+        conversation,
         CONV_TYPE.CONFERENCE,
         selfParticipant,
         CALL_TYPE.NORMAL,
-        {
-          currentAvailableDeviceId: mediaDevices,
-        } as unknown as MediaDevicesHandler,
+        buildMediaDevicesHandler(),
       );
+
+      call.state(CALL_STATE.MEDIA_ESTAB);
 
       conversation.roles({[senderUserId.id]: DefaultConversationRoleName.WIRE_MEMBER});
 
       callingRepository['conversationState'].conversations.push(conversation);
-      spyOn(callingRepository, 'findCall').and.returnValue(call);
+      callingRepository['callState'].calls([call]);
       spyOn(callingRepository, 'muteCall').and.callThrough();
       spyOn(wCall, 'recvMsg').and.callThrough();
 
       const event: CallingEvent = {
         content: {
+          emojis: {},
+          isHandUp: false,
           type: CALL_MESSAGE_TYPE.REMOTE_MUTE,
           version: '',
           data: {targets: {[selfUserId.domain]: {[selfUserId.id]: [selfClientId]}}},
@@ -206,19 +181,19 @@ describe('CallingRepository', () => {
 
       const call = new Call(
         selfUserId,
-        conversation.qualifiedId,
+        conversation,
         CONV_TYPE.CONFERENCE,
         selfParticipant,
         CALL_TYPE.NORMAL,
-        {
-          currentAvailableDeviceId: mediaDevices,
-        } as unknown as MediaDevicesHandler,
+        buildMediaDevicesHandler(),
       );
+
+      call.state(CALL_STATE.MEDIA_ESTAB);
 
       conversation.roles({[senderUserId.id]: DefaultConversationRoleName.WIRE_ADMIN});
 
       callingRepository['conversationState'].conversations.push(conversation);
-      spyOn(callingRepository, 'findCall').and.returnValue(call);
+      callingRepository['callState'].calls([call]);
       spyOn(callingRepository, 'muteCall').and.callThrough();
       spyOn(wCall, 'recvMsg').and.callThrough();
 
@@ -226,6 +201,8 @@ describe('CallingRepository', () => {
 
       const event: CallingEvent = {
         content: {
+          emojis: {},
+          isHandUp: false,
           type: CALL_MESSAGE_TYPE.REMOTE_MUTE,
           version: '',
           data: {targets: {[selfUserId.domain]: {[selfUserId.id]: [someOtherClientId]}}},
@@ -329,13 +306,11 @@ describe('CallingRepository', () => {
 
       const incomingCall = new Call(
         userId,
-        mlsConversation.qualifiedId,
+        mlsConversation,
         CONV_TYPE.CONFERENCE_MLS,
         selfParticipant,
         CALL_TYPE.NORMAL,
-        {
-          currentAvailableDeviceId: mediaDevices,
-        } as unknown as MediaDevicesHandler,
+        buildMediaDevicesHandler(),
       );
 
       jest.spyOn(callingRepository, 'pushClients').mockResolvedValueOnce(true);
@@ -366,13 +341,11 @@ describe('CallingRepository', () => {
 
       const incomingCall = new Call(
         userId,
-        mlsConversation.qualifiedId,
+        mlsConversation,
         CONV_TYPE.ONEONONE,
         selfParticipant,
         CALL_TYPE.NORMAL,
-        {
-          currentAvailableDeviceId: mediaDevices,
-        } as unknown as MediaDevicesHandler,
+        buildMediaDevicesHandler(),
       );
 
       jest.spyOn(callingRepository, 'pushClients').mockResolvedValueOnce(true);
@@ -390,37 +363,31 @@ describe('CallingRepository', () => {
       const userId = {domain: '', id: ''};
       const incomingCall = new Call(
         userId,
-        createConversation().qualifiedId,
+        createConversation(),
         CONV_TYPE.CONFERENCE,
         selfParticipant,
         CALL_TYPE.NORMAL,
-        {
-          currentAvailableDeviceId: mediaDevices,
-        } as unknown as MediaDevicesHandler,
+        buildMediaDevicesHandler(),
       );
       incomingCall.state(CALL_STATE.INCOMING);
 
       const activeCall = new Call(
         userId,
-        createConversation().qualifiedId,
+        createConversation(),
         CONV_TYPE.CONFERENCE,
         selfParticipant,
         CALL_TYPE.NORMAL,
-        {
-          currentAvailableDeviceId: mediaDevices,
-        } as unknown as MediaDevicesHandler,
+        buildMediaDevicesHandler(),
       );
       activeCall.state(CALL_STATE.MEDIA_ESTAB);
 
       const declinedCall = new Call(
         userId,
-        createConversation().qualifiedId,
+        createConversation(),
         CONV_TYPE.CONFERENCE,
         selfParticipant,
         CALL_TYPE.NORMAL,
-        {
-          currentAvailableDeviceId: mediaDevices,
-        } as unknown as MediaDevicesHandler,
+        buildMediaDevicesHandler(),
       );
       declinedCall.state(CALL_STATE.INCOMING);
       declinedCall.reason(REASON.STILL_ONGOING);
@@ -437,13 +404,11 @@ describe('CallingRepository', () => {
       const userId = {domain: '', id: ''};
       const call = new Call(
         userId,
-        createConversation().qualifiedId,
+        createConversation(),
         CONV_TYPE.CONFERENCE,
         selfParticipant,
         CALL_TYPE.NORMAL,
-        {
-          currentAvailableDeviceId: mediaDevices,
-        } as unknown as MediaDevicesHandler,
+        buildMediaDevicesHandler(),
       );
       const source = new window.RTCAudioSource();
       const audioTrack = source.createTrack();
@@ -467,13 +432,11 @@ describe('CallingRepository', () => {
       const selfParticipant = createSelfParticipant();
       const call = new Call(
         {domain: '', id: ''},
-        createConversation().qualifiedId,
+        createConversation(),
         CONV_TYPE.CONFERENCE,
         selfParticipant,
         CALL_TYPE.NORMAL,
-        {
-          currentAvailableDeviceId: mediaDevices,
-        } as unknown as MediaDevicesHandler,
+        buildMediaDevicesHandler(),
       );
       const source = new window.RTCAudioSource();
       const audioTrack = source.createTrack();
@@ -503,13 +466,11 @@ describe('CallingRepository', () => {
 
       const call = new Call(
         {domain: '', id: ''},
-        createConversation().qualifiedId,
+        createConversation(),
         0,
         selfParticipant,
         CALL_TYPE.NORMAL,
-        {
-          currentAvailableDeviceId: mediaDevices,
-        } as unknown as MediaDevicesHandler,
+        buildMediaDevicesHandler(),
       );
       spyOn(callingRepository['callState'], 'joinedCall').and.returnValue(call);
       callingRepository.stopMediaSource(MediaType.AUDIO);
@@ -523,15 +484,117 @@ describe('CallingRepository', () => {
       expect(selfParticipant.releaseVideoStream).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe('camera', () => {
+    let selfParticipant: Participant;
+    let conv: Conversation;
+    let call: Call;
+    beforeEach(() => {
+      selfParticipant = createSelfParticipant();
+      conv = createConversation();
+      call = new Call(
+        {domain: '', id: ''},
+        conv,
+        CONV_TYPE.CONFERENCE,
+        selfParticipant,
+        CALL_TYPE.NORMAL,
+        buildMediaDevicesHandler(),
+      );
+    });
+
+    describe('on incoming call', () => {
+      it('toggle on', async () => {
+        selfParticipant.videoState(VIDEO_STATE.STOPPED);
+        spyOn(selfParticipant, 'releaseVideoStream');
+        spyOn(wCall, 'setVideoSendState');
+        call.state(CALL_STATE.INCOMING);
+        callingRepository.toggleCamera(call);
+        expect(selfParticipant.releaseVideoStream).toHaveBeenCalledTimes(0);
+        expect(wCall.setVideoSendState).toHaveBeenCalledWith(wUser, conv.id, VIDEO_STATE.STARTED);
+      });
+
+      it('toggle off', async () => {
+        selfParticipant.videoState(VIDEO_STATE.STARTED);
+        spyOn(selfParticipant, 'releaseVideoStream');
+        spyOn(wCall, 'setVideoSendState');
+        call.state(CALL_STATE.INCOMING);
+        callingRepository.toggleCamera(call);
+
+        expect(selfParticipant.releaseVideoStream).toHaveBeenCalledTimes(1);
+        expect(wCall.setVideoSendState).toHaveBeenCalledWith(wUser, conv.id, VIDEO_STATE.STOPPED);
+      });
+    });
+
+    describe('on running call', () => {
+      it('toggle on', async () => {
+        selfParticipant.videoState(VIDEO_STATE.STOPPED);
+        spyOn(selfParticipant, 'releaseVideoStream');
+        spyOn(wCall, 'setVideoSendState');
+        call.state(CALL_STATE.MEDIA_ESTAB);
+        callingRepository.toggleCamera(call);
+        expect(selfParticipant.releaseVideoStream).toHaveBeenCalledTimes(0);
+        expect(wCall.setVideoSendState).toHaveBeenCalledWith(wUser, conv.id, VIDEO_STATE.STARTED);
+      });
+
+      it('toggle off', async () => {
+        selfParticipant.videoState(VIDEO_STATE.STARTED);
+        spyOn(selfParticipant, 'releaseVideoStream');
+        spyOn(wCall, 'setVideoSendState');
+        call.state(CALL_STATE.MEDIA_ESTAB);
+        callingRepository.toggleCamera(call);
+
+        expect(selfParticipant.releaseVideoStream).toHaveBeenCalledTimes(1);
+        expect(wCall.setVideoSendState).toHaveBeenCalledWith(wUser, conv.id, VIDEO_STATE.STOPPED);
+      });
+
+      // This is an edge case. You can toggleCamera on when you have screen share enabled!
+      it('toggle on when screen shared', async () => {
+        selfParticipant.videoState(VIDEO_STATE.SCREENSHARE);
+        spyOn(selfParticipant, 'releaseVideoStream');
+        spyOn(wCall, 'setVideoSendState');
+        call.state(CALL_STATE.MEDIA_ESTAB);
+        callingRepository.toggleCamera(call);
+        expect(selfParticipant.releaseVideoStream).toHaveBeenCalledTimes(0);
+        expect(wCall.setVideoSendState).toHaveBeenCalledWith(wUser, conv.id, VIDEO_STATE.STARTED);
+      });
+    });
+
+    describe.skip('on not supported call state', () => {
+      it('ANSWERED, toggle will be failing', async () => {
+        selfParticipant.videoState(VIDEO_STATE.STOPPED);
+        call.state(CALL_STATE.ANSWERED);
+        expect(() => callingRepository.toggleCamera(call)).toThrow('invalid call state in `toggleCamera`');
+      });
+      it('NONE, toggle will be failing', async () => {
+        selfParticipant.videoState(VIDEO_STATE.STOPPED);
+        call.state(CALL_STATE.NONE);
+        expect(() => callingRepository.toggleCamera(call)).toThrow('invalid call state in `toggleCamera`');
+      });
+      it('UNKNOWN, toggle will be failing', async () => {
+        selfParticipant.videoState(VIDEO_STATE.STOPPED);
+        call.state(CALL_STATE.UNKNOWN);
+        expect(() => callingRepository.toggleCamera(call)).toThrow('invalid call state in `toggleCamera`');
+      });
+      it('OUTGOING, toggle will be failing', async () => {
+        selfParticipant.videoState(VIDEO_STATE.STOPPED);
+        call.state(CALL_STATE.OUTGOING);
+        expect(() => callingRepository.toggleCamera(call)).toThrow('invalid call state in `toggleCamera`');
+      });
+      it('TERM_LOCAL, toggle will be failing', async () => {
+        selfParticipant.videoState(VIDEO_STATE.STOPPED);
+        call.state(CALL_STATE.TERM_LOCAL);
+        expect(() => callingRepository.toggleCamera(call)).toThrow('invalid call state in `toggleCamera`');
+      });
+      it('TERM_REMOTE, toggle will be failing', async () => {
+        selfParticipant.videoState(VIDEO_STATE.STOPPED);
+        call.state(CALL_STATE.TERM_REMOTE);
+        expect(() => callingRepository.toggleCamera(call)).toThrow('invalid call state in `toggleCamera`');
+      });
+    });
+  });
 });
 
 describe('CallingRepository ISO', () => {
-  const mediaDevices = {
-    audioinput: ko.pureComputed(() => 'test'),
-    audiooutput: ko.pureComputed(() => 'test'),
-    screeninput: ko.pureComputed(() => 'test'),
-    videoinput: ko.pureComputed(() => 'test'),
-  };
   describe('incoming call', () => {
     let avsUser: number;
     let avsCall: Wcall;
@@ -555,9 +618,7 @@ describe('CallingRepository ISO', () => {
         } as any, // EventRepository
         {} as any, // UserRepository
         {} as any, // MediaStreamHandler
-        {
-          currentAvailableDeviceId: mediaDevices,
-        } as unknown as MediaDevicesHandler, // mediaDevicesHandler
+        buildMediaDevicesHandler(), // mediaDevicesHandler
         {
           toServerTimestamp: jest.fn().mockImplementation(() => Date.now()),
         } as any, // ServerTimeHandler
@@ -737,7 +798,7 @@ describe.skip('E2E audio call', () => {
            * Jasmine will eventually timeout if the audio is not flowing after 5s
            */
           client
-            .getStats(call.conversationId)
+            .getStats(call.conversation.qualifiedId)
             ?.then(extractAudioStats)
             .then(audioStats => {
               if (audioStats.length > 0) {

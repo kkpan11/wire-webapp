@@ -21,11 +21,11 @@ import {MouseEvent, KeyboardEvent} from 'react';
 
 import {TabIndex} from '@wireapp/react-ui-kit/lib/types/enums';
 
-import {Icon} from 'Components/Icon';
-import {DeviceVerificationBadges} from 'Components/VerificationBadge';
+import {DeviceVerificationBadges} from 'Components/Badge';
+import * as Icon from 'Components/Icon';
 import {WireIdentity} from 'src/script/E2EIdentity';
 import {useKoSubscribableChildren} from 'Util/ComponentUtil';
-import {handleKeyDown} from 'Util/KeyboardUtil';
+import {handleKeyDown, KEY} from 'Util/KeyboardUtil';
 import {t} from 'Util/LocalizerUtil';
 import {splitFingerprint} from 'Util/StringUtil';
 
@@ -63,9 +63,16 @@ export const Device = ({device, isSSO, onSelect, onRemove, getDeviceIdentity, de
     <div
       className="preferences-devices-card"
       onClick={onDeviceSelect}
-      onKeyDown={event => handleKeyDown(event, onDeviceSelect)}
-      tabIndex={TabIndex.FOCUSABLE}
+      onKeyDown={event =>
+        handleKeyDown({
+          event,
+          callback: onDeviceSelect,
+          keys: [KEY.ENTER, KEY.SPACE],
+        })
+      }
       role="button"
+      aria-label={t('accessibility.headings.preferencesDeviceDetails')}
+      tabIndex={TabIndex.FOCUSABLE}
     >
       <div className="preferences-devices-card-info">
         <div
@@ -77,7 +84,7 @@ export const Device = ({device, isSSO, onSelect, onRemove, getDeviceIdentity, de
           <DeviceVerificationBadges device={device} getIdentity={getDeviceIdentity} />
         </div>
 
-        {deviceIdentity && (
+        {deviceIdentity?.thumbprint && (
           <p className="preferences-devices-id">
             <span>{t('preferencesMLSThumbprint')}</span>
 
@@ -106,7 +113,7 @@ export const Device = ({device, isSSO, onSelect, onRemove, getDeviceIdentity, de
             onKeyDown={handleKeyPress}
             data-uie-name="do-device-remove"
           >
-            <Icon.Delete />
+            <Icon.DeleteIcon />
           </button>
         )}
 

@@ -18,10 +18,12 @@
  */
 
 import {QualifiedId} from '@wireapp/api-client/lib/user';
+import {amplify} from 'amplify';
 import ko from 'knockout';
 import {singleton} from 'tsyringe';
 
 import {REASON as CALL_REASON, STATE as CALL_STATE} from '@wireapp/avs';
+import {WebAppEvents} from '@wireapp/webapp-events';
 
 import {matchQualifiedIds} from 'Util/QualifiedId';
 
@@ -29,6 +31,8 @@ import {Call} from './Call';
 
 import {Config} from '../Config';
 import type {ElectronDesktopCapturerSource} from '../media/MediaDevicesHandler';
+import {EventName} from '../tracking/EventName';
+import {Segmentation} from '../tracking/Segmentation';
 import {CallViewTab} from '../view_model/CallingViewModel';
 
 export enum MuteState {
@@ -38,23 +42,43 @@ export enum MuteState {
   REMOTE_FORCE_MUTED,
 }
 
+export enum CallingViewMode {
+  FULL_SCREEN = 'fullscreen',
+  DETACHED_WINDOW = 'detached_window',
+  MINIMIZED = 'minimized',
+}
+
+export enum DesktopScreenShareMenu {
+  NONE = 'none',
+  MAIN_WINDOW = 'main_window',
+  DETACHED_WINDOW = 'detached_window',
+}
+
+type Emoji = {emoji: string; id: string; left: number; from: string};
+
 @singleton()
 export class CallState {
   public readonly calls: ko.ObservableArray<Call> = ko.observableArray();
+  public readonly emojis: ko.ObservableArray<Emoji> = ko.observableArray<Emoji>([]);
   /** List of calls that can be joined by the user */
   public readonly joinableCalls: ko.PureComputed<Call[]>;
-  public readonly acceptedVersionWarnings: ko.ObservableArray<QualifiedId> = ko.observableArray<QualifiedId>();
-  public readonly cbrEncoding: ko.Observable<number> = ko.observable(
-    Config.getConfig().FEATURE.ENFORCE_CONSTANT_BITRATE ? 1 : 0,
-  );
-  readonly selectableScreens: ko.Observable<ElectronDesktopCapturerSource[]> = ko.observable([]);
-  readonly selectableWindows: ko.Observable<ElectronDesktopCapturerSource[]> = ko.observable([]);
+  public readonly acceptedVersionWarnings = ko.observableArray<QualifiedId>();
+  public readonly cbrEncoding = ko.observable(Config.getConfig().FEATURE.ENFORCE_CONSTANT_BITRATE ? 1 : 0);
+  readonly selectableScreens = ko.observable<ElectronDesktopCapturerSource[]>([]);
+  readonly selectableWindows = ko.observable<ElectronDesktopCapturerSource[]>([]);
   /** call that is current active (connecting or connected) */
   public readonly activeCalls: ko.PureComputed<Call[]>;
   public readonly joinedCall: ko.PureComputed<Call | undefined>;
-  public readonly activeCallViewTab: ko.Observable<string> = ko.observable(CallViewTab.ALL);
-  readonly isChoosingScreen: ko.PureComputed<boolean>;
-  readonly isSpeakersViewActive: ko.PureComputed<boolean>;
+  public readonly activeCallViewTab = ko.observable(CallViewTab.ALL);
+  public readonly hasAvailableScreensToShare: ko.PureComputed<boolean>;
+  public readonly isSpeakersViewActive: ko.PureComputed<boolean>;
+  public readonly isMaximisedViewActive: ko.PureComputed<boolean>;
+  public readonly viewMode = ko.observable<CallingViewMode>(CallingViewMode.MINIMIZED);
+  public readonly detachedWindow = ko.observable<Window | null>(null);
+  public readonly isScreenSharingSourceFromDetachedWindow = ko.observable<boolean>(false);
+  public readonly detachedWindowCallQualifiedId = ko.observable<QualifiedId | null>(null);
+  public readonly desktopScreenShareMenu = ko.observable<DesktopScreenShareMenu>(DesktopScreenShareMenu.NONE);
+  private currentViewMode = this.viewMode();
 
   constructor() {
     this.joinedCall = ko.pureComputed(() => this.calls().find(call => call.state() === CALL_STATE.MEDIA_ESTAB));
@@ -64,20 +88,35 @@ export class CallState {
         call => call.state() === CALL_STATE.INCOMING && call.reason() !== CALL_REASON.ANSWERED_ELSEWHERE,
       ),
     );
-    this.isChoosingScreen = ko.pureComputed(
-      () => this.selectableScreens().length > 0 || this.selectableWindows().length > 0,
-    );
 
     this.calls.subscribe(activeCalls => {
-      const activeCallIds = activeCalls.map(call => call.conversationId);
+      const activeCallIds = activeCalls.map(call => call.conversation.qualifiedId);
       this.acceptedVersionWarnings.remove(
         acceptedId => !activeCallIds.some(callId => matchQualifiedIds(acceptedId, callId)),
       );
     });
     this.isSpeakersViewActive = ko.pureComputed(() => this.activeCallViewTab() === CallViewTab.SPEAKERS);
 
-    this.isChoosingScreen = ko.pureComputed(
+    this.isMaximisedViewActive = ko.pureComputed(() => {
+      const call = this.joinedCall();
+      if (!call) {
+        return false;
+      }
+      return call.maximizedParticipant() !== null;
+    });
+
+    this.hasAvailableScreensToShare = ko.pureComputed(
       () => this.selectableScreens().length > 0 || this.selectableWindows().length > 0,
     );
+
+    // Capture the viewMode value before change
+    this.viewMode.subscribe(newVal => (this.currentViewMode = newVal), this, 'beforeChange');
+
+    this.viewMode.subscribe(() => {
+      amplify.publish(WebAppEvents.ANALYTICS.EVENT, EventName.UI.CALLING_UI_SIZE, {
+        [Segmentation.CALLING_UI_SIZE.FROM]: this.currentViewMode,
+        [Segmentation.CALLING_UI_SIZE.TO]: this.viewMode(),
+      });
+    });
   }
 }

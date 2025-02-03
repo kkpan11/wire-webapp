@@ -18,7 +18,7 @@
  */
 
 import type {DomainData} from '@wireapp/api-client/lib/account/DomainData';
-import type {LoginData, RegisterData, SendLoginCode} from '@wireapp/api-client/lib/auth/';
+import type {LoginData, RegisterData} from '@wireapp/api-client/lib/auth/';
 import {VerificationActionType} from '@wireapp/api-client/lib/auth/VerificationActionType';
 import {ClientType} from '@wireapp/api-client/lib/client/';
 import {BackendError, BackendErrorLabel, SyntheticErrorLabel} from '@wireapp/api-client/lib/http';
@@ -39,6 +39,10 @@ import type {Api, RootState, ThunkAction, ThunkDispatch} from '../reducer';
 import type {LoginDataState, RegistrationDataState} from '../reducer/authReducer';
 
 type LoginLifecycleFunction = (dispatch: ThunkDispatch, getState: () => RootState, global: Api) => Promise<void>;
+
+const isSystemKeychainAccessError = (error: any): error is Error => {
+  return error instanceof Error && error.message.includes('cryption is not available');
+};
 
 export class AuthAction {
   doLogin = (loginData: LoginData, getEntropy?: () => Promise<Uint8Array>): ThunkAction => {
@@ -117,21 +121,11 @@ export class AuthAction {
           if (error instanceof LowDiskSpaceError) {
             error = new LabeledError(LabeledError.GENERAL_ERRORS.LOW_DISK_SPACE, error);
           }
+          if (isSystemKeychainAccessError(error)) {
+            error = new LabeledError(LabeledError.GENERAL_ERRORS.SYSTEM_KEYCHAIN_ACCESS, error);
+          }
           dispatch(AuthActionCreator.failedLogin(error));
         }
-        throw error;
-      }
-    };
-  };
-
-  doSendPhoneLoginCode = (loginRequest: Omit<SendLoginCode, 'voice_call'>): ThunkAction => {
-    return async (dispatch, getState, {apiClient}) => {
-      dispatch(AuthActionCreator.startSendPhoneLoginCode());
-      try {
-        const {expires_in} = await apiClient.api.auth.postLoginSend(loginRequest);
-        dispatch(AuthActionCreator.successfulSendPhoneLoginCode(expires_in));
-      } catch (error) {
-        dispatch(AuthActionCreator.failedSendPhoneLoginCode(error));
         throw error;
       }
     };

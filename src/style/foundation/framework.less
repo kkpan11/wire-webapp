@@ -22,15 +22,16 @@
   .full-screen;
 
   display: flex;
-  min-width: @screen-sm-min;
+  min-width: var(--screen-sm-min);
   background-color: var(--app-bg);
   transition: filter 0.3s;
 
   .left-column {
     position: relative;
-    width: @conversation-list-width;
+    display: flex;
+    min-width: var(--conversation-list-width);
     flex: 0 0 auto;
-    border-right: 1px solid var(--sidebar-border-color);
+    border-right: 1px solid var(--border-color);
     background-color: var(--sidebar-bg);
     color: var(--main-color);
     fill: var(--main-color);
@@ -41,13 +42,13 @@
     }
 
     .team-mode & {
-      width: @conversation-list-width + @teams-width;
+      width: calc(var(--conversation-list-width) + var(--teams-width));
     }
   }
 
   .center-column {
     position: relative;
-    min-width: @screen-sm-min;
+    min-width: var(--screen-sm-min);
     flex: 1 1 auto;
 
     &__overlay {
@@ -61,13 +62,14 @@
     }
 
     #conversation-input-bar,
-    #conversation-title-bar {
+    #conversation-title-bar,
+    #message-list {
       width: 100%;
-      transition: width @animation-timing-fast @ease-out-quart;
+      transition: width var(--animation-timing-fast) var(--ease-out-quart);
 
       @media (min-width: 1000px) {
         &.is-right-panel-open {
-          width: calc(100% - @right-width);
+          width: calc(100% - var(--right-width));
         }
       }
     }
@@ -79,11 +81,11 @@
     right: 0;
     right: 0;
     overflow: hidden;
-    width: @right-width;
+    width: var(--right-width);
     //width: 0;
     height: 100vh;
     max-height: 100%;
-    border-left: 1px solid var(--sidebar-border-color);
+    border-left: 1px solid var(--border-color);
     background-color: var(--sidebar-bg);
     transform: scale(1, 1);
 
@@ -109,8 +111,10 @@
     top: 64px;
   }
 
-  @media (max-width: calc(@screen-sm-min*2)) {
-    .left-column {
+  @media (max-width: 720px) {
+    .left-column,
+    .conversations,
+    .conversations-wrapper {
       width: 100%;
     }
   }

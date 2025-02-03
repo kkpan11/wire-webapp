@@ -51,11 +51,12 @@
 
 .preferences-devices-card {
   display: flex;
-  width: var(--preferences-width);
+  width: 100%;
+  max-width: var(--preferences-width);
   align-items: center;
   justify-content: space-between;
 
-  border-bottom: 1px solid @separator-color;
+  border-bottom: 1px solid var(--separator-color);
   cursor: pointer;
   padding-block: 4px 8px;
 
@@ -164,7 +165,7 @@
 }
 
 .preferences-devices-separator {
-  width: var(--preferences-width);
+  max-width: var(--preferences-width);
   margin-bottom: 32px;
 }
 

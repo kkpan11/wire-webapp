@@ -29,7 +29,6 @@ import ko from 'knockout';
 import {container} from 'tsyringe';
 
 import {AssetRepository} from 'src/script/assets/AssetRepository';
-import {AssetService} from 'src/script/assets/AssetService';
 import {CallingRepository} from 'src/script/calling/CallingRepository';
 import {ClientEntity} from 'src/script/client/ClientEntity';
 import {ClientRepository} from 'src/script/client/ClientRepository';
@@ -151,7 +150,7 @@ export class TestFactory {
    */
   async exposeUserActors() {
     await this.exposeClientActors();
-    this.assetRepository = new AssetRepository(new AssetService());
+    this.assetRepository = new AssetRepository();
 
     this.connection_service = new ConnectionService();
     this.user_service = new UserService(this.storage_service);
@@ -183,7 +182,12 @@ export class TestFactory {
     await this.exposeUserActors();
     this.connection_service = new ConnectionService();
 
-    this.connection_repository = new ConnectionRepository(this.connection_service, this.user_repository);
+    this.connection_repository = new ConnectionRepository(
+      this.connection_service,
+      this.user_repository,
+      this.self_service,
+      this.team_service,
+    );
 
     return this.connection_repository;
   }
@@ -208,6 +212,7 @@ export class TestFactory {
     this.team_repository = new TeamRepository(
       this.user_repository,
       this.assetRepository,
+      () => Promise.resolve(),
       this.team_service,
       this.user_repository['userState'],
       new TeamState(this.user_repository['userState']),
@@ -223,8 +228,10 @@ export class TestFactory {
     await this.exposeTeamActors();
     await this.exposeClientActors();
 
+    this.self_service = new SelfService();
+
     this.self_repository = new SelfRepository(
-      new SelfService(),
+      this.self_service,
       this.user_repository,
       this.team_repository,
       this.client_repository,
@@ -299,12 +306,15 @@ export class TestFactory {
    */
   async exposeCallingActors() {
     await this.exposeConversationActors();
+
+    const mediaRepository = new MediaRepository(new PermissionRepository());
+
     this.calling_repository = new CallingRepository(
       this.message_repository,
       this.event_repository,
       this.user_repository,
-      new MediaRepository(new PermissionRepository()).streamHandler,
-      new MediaRepository(new PermissionRepository()).devicesHandler,
+      mediaRepository.streamHandler,
+      mediaRepository.devicesHandler,
       serverTimeHandler,
       undefined,
       this.conversation_repository['conversationState'],
@@ -318,7 +328,7 @@ export class TestFactory {
    */
   async exposeTrackingActors() {
     await this.exposeTeamActors();
-    this.tracking_repository = new EventTrackingRepository(this.message_repository, this.user_repository['userState']);
+    this.tracking_repository = new EventTrackingRepository(this.message_repository);
 
     return this.tracking_repository;
   }

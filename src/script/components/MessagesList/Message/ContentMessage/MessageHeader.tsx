@@ -17,8 +17,11 @@
  *
  */
 
+import {Tooltip} from '@wireapp/react-ui-kit';
+
 import {AVATAR_SIZE, Avatar} from 'Components/Avatar';
-import {Icon} from 'Components/Icon';
+import {UserBlockedBadge} from 'Components/Badge';
+import * as Icon from 'Components/Icon';
 import {UserName} from 'Components/UserName';
 import {ContentMessage} from 'src/script/entity/message/ContentMessage';
 import {DeleteMessage} from 'src/script/entity/message/DeleteMessage';
@@ -44,38 +47,30 @@ function BadgeSection({sender}: {sender: User}) {
     <>
       {sender.isService && (
         <span className="message-header-icon-service">
-          <Icon.Service />
+          <Icon.ServiceIcon />
         </span>
       )}
 
       {sender.isExternal() && (
-        <span
-          className="message-header-icon-external with-tooltip with-tooltip--external"
-          data-tooltip={t('rolePartner')}
-          data-uie-name="sender-external"
-        >
-          <Icon.External />
-        </span>
+        <Tooltip body={t('rolePartner')} data-uie-name="sender-external" className="message-header-icon-external">
+          <Icon.ExternalIcon />
+        </Tooltip>
       )}
 
       {sender.isFederated && (
-        <span
-          className="message-header-icon-guest with-tooltip with-tooltip--external"
-          data-tooltip={sender.handle}
-          data-uie-name="sender-federated"
-        >
-          <Icon.Federation />
-        </span>
+        <Tooltip className="message-header-icon-guest" body={sender.handle} data-uie-name="sender-federated">
+          <Icon.FederationIcon />
+        </Tooltip>
       )}
 
       {sender.isDirectGuest() && !sender.isFederated && (
-        <span
-          className="message-header-icon-guest with-tooltip with-tooltip--external"
-          data-tooltip={t('conversationGuestIndicator')}
+        <Tooltip
+          className="message-header-icon-guest"
+          body={t('conversationGuestIndicator')}
           data-uie-name="sender-guest"
         >
-          <Icon.Guest />
-        </span>
+          <Icon.GuestIcon />
+        </Tooltip>
       )}
     </>
   );
@@ -91,7 +86,7 @@ export function MessageHeader({
   children,
 }: MessageHeaderParams) {
   const {user: sender} = useKoSubscribableChildren(message, ['user']);
-  const {isAvailable} = useKoSubscribableChildren(sender, ['isAvailable']);
+  const {isAvailable, isBlocked} = useKoSubscribableChildren(sender, ['isAvailable', 'isBlocked']);
 
   return (
     <div className="message-header">
@@ -107,12 +102,18 @@ export function MessageHeader({
       <div className="message-header-label" data-uie-name={uieName}>
         <h4
           className={`message-header-label-sender ${!noColor && message.accent_color()}`}
-          css={!isAvailable ? {color: 'var(--gray-70)'} : {}}
+          css={!isAvailable ? {color: 'var(--text-input-placeholder)'} : {}}
           data-uie-name={uieName ? `${uieName}-sender-name` : 'sender-name'}
           data-uie-uid={sender.id}
         >
           <UserName user={sender} />
         </h4>
+
+        {isBlocked && (
+          <span css={{marginLeft: 4}}>
+            <UserBlockedBadge />
+          </span>
+        )}
 
         {!noBadges && <BadgeSection sender={sender} />}
 

@@ -19,7 +19,7 @@
 
 import React, {useEffect, useState} from 'react';
 
-import {Icon} from 'Components/Icon';
+import * as Icon from 'Components/Icon';
 import {MediaDeviceType} from 'src/script/media/MediaDeviceType';
 import {useKoSubscribableChildren} from 'Util/ComponentUtil';
 import {t} from 'Util/LocalizerUtil';
@@ -40,12 +40,14 @@ interface MicrophonePreferencesProps {
   devicesHandler: MediaDevicesHandler;
   refreshStream: () => Promise<MediaStream>;
   streamHandler: MediaStreamHandler;
+  hasActiveCall: boolean;
 }
 
 const MicrophonePreferences: React.FC<MicrophonePreferencesProps> = ({
   devicesHandler,
   streamHandler,
   refreshStream,
+  hasActiveCall,
 }) => {
   const [isRequesting, setIsRequesting] = useState(false);
   const [stream, setStream] = useState<MediaStream>();
@@ -78,7 +80,7 @@ const MicrophonePreferences: React.FC<MicrophonePreferencesProps> = ({
 
   useEffect(
     () => () => {
-      if (stream) {
+      if (stream && !hasActiveCall) {
         streamHandler.releaseTracksFromStream(stream);
       }
     },
@@ -100,7 +102,7 @@ const MicrophonePreferences: React.FC<MicrophonePreferencesProps> = ({
         devices={availableDevices as MediaDeviceInfo[]}
         value={currentDeviceId}
         defaultDeviceName={t('preferencesAVMicrophone')}
-        icon={Icon.MicOn}
+        icon={Icon.MicOnIcon}
         isRequesting={isRequesting}
         onChange={deviceId => devicesHandler.currentDeviceId[MediaDeviceType.AUDIO_INPUT](deviceId)}
         title={t('preferencesAVMicrophone')}

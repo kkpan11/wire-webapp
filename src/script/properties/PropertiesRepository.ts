@@ -26,16 +26,21 @@ import ko from 'knockout';
 import {WebAppEvents} from '@wireapp/webapp-events';
 
 import {PrimaryModal} from 'Components/Modals/PrimaryModal';
+import {PrimaryModalType} from 'Components/Modals/PrimaryModal/PrimaryModalTypes';
+import {Config} from 'src/script/Config';
+import {deepMerge} from 'Util/deepMerge';
 import {Environment} from 'Util/Environment';
-import {t} from 'Util/LocalizerUtil';
+import {replaceLink, t} from 'Util/LocalizerUtil';
 import {getLogger, Logger} from 'Util/Logger';
+import {loadValue} from 'Util/StorageUtil';
 
 import type {PropertiesService} from './PropertiesService';
-import {PROPERTIES_TYPE} from './PropertiesType';
+import {PROPERTIES_TYPE, UserConsentStatus} from './PropertiesType';
 
-import {Config} from '../Config';
 import type {User} from '../entity/User';
 import type {SelfService} from '../self/SelfService';
+import {StorageKey} from '../storage';
+import {isTelemetryEnabledAtCurrentEnvironment} from '../tracking/Telemetry.helpers';
 import {ConsentValue} from '../user/ConsentValue';
 import {CONVERSATION_TYPING_INDICATOR_MODE} from '../user/TypingIndicatorMode';
 
@@ -45,7 +50,7 @@ export class PropertiesRepository {
     return {
       WEBAPP_ACCOUNT_SETTINGS: 'webapp',
       WIRE_MARKETING_CONSENT: {
-        defaultValue: ConsentValue.NOT_GIVEN,
+        defaultValue: false,
         key: 'WIRE_MARKETING_CONSENT',
       },
       WIRE_RECEIPT_MODE: {
@@ -64,9 +69,8 @@ export class PropertiesRepository {
   public readonly receiptMode: ko.Observable<RECEIPT_MODE>;
   public readonly typingIndicatorMode: ko.Observable<CONVERSATION_TYPING_INDICATOR_MODE>;
   private readonly selfService: SelfService;
-  private readonly selfUser: ko.Observable<User>;
+  private readonly selfUser: ko.Observable<User | undefined>;
   public properties: WebappProperties;
-  public readonly marketingConsent: ko.Observable<ConsentValue | boolean>;
 
   constructor(propertiesService: PropertiesService, selfService: SelfService) {
     this.propertiesService = propertiesService;
@@ -74,12 +78,12 @@ export class PropertiesRepository {
     this.logger = getLogger('PropertiesRepository');
 
     this.properties = {
-      contact_import: {},
       enable_debugging: false,
       settings: {
         call: {
           enable_soundless_incoming_calls: false,
           enable_vbr_encoding: true,
+          enable_press_space_to_unmute: false,
         },
         emoji: {
           replace_inline: true,
@@ -88,15 +92,17 @@ export class PropertiesRepository {
           font_size: '',
           theme: 'default',
           view_folders: false,
+          markdown_preview: true,
         },
         notifications: NotificationPreference.ON,
         previews: {
           send: true,
         },
         privacy: {
-          improve_wire: undefined,
-          report_errors: undefined,
-          telemetry_sharing: undefined,
+          telemetry_data_sharing: undefined,
+          marketing_consent:
+            loadValue(StorageKey.INITIAL_MAKRETING_CONSENT_ACCEPTED) ??
+            PropertiesRepository.CONFIG.WIRE_MARKETING_CONSENT.defaultValue,
         },
         sound: {
           alerts: AudioPreference.ALL,
@@ -104,58 +110,66 @@ export class PropertiesRepository {
       },
       version: 1,
     };
+
     this.selfUser = ko.observable();
     this.receiptMode = ko.observable(PropertiesRepository.CONFIG.WIRE_RECEIPT_MODE.defaultValue);
     this.typingIndicatorMode = ko.observable(PropertiesRepository.CONFIG.WIRE_TYPING_INDICATOR_MODE.defaultValue);
     /** @type {ko.Observable<ConsentValue | boolean>} */
-    this.marketingConsent = ko.observable(PropertiesRepository.CONFIG.WIRE_MARKETING_CONSENT.defaultValue);
   }
 
-  checkPrivacyPermission(): Promise<void> {
-    const isCheckConsentDisabled = !Config.getConfig().FEATURE.CHECK_CONSENT;
-    const isPrivacyPreferenceSet = this.getPreference(PROPERTIES_TYPE.PRIVACY) !== undefined;
-    const isTelemetryPreferenceSet = this.getPreference(PROPERTIES_TYPE.TELEMETRY_SHARING) !== undefined;
-    const isTeamAccount = !!this.selfUser().teamId;
-    const enablePrivacy = () => {
-      this.savePreference(PROPERTIES_TYPE.PRIVACY, true);
+  public getUserConsentStatus() {
+    const {
+      privacy: {marketing_consent: marketingConsent, telemetry_data_sharing: telemetryConsent},
+    } = this.properties.settings;
+
+    let userConsentStatus = UserConsentStatus.ALL_DENIED;
+
+    if (marketingConsent && telemetryConsent) {
+      userConsentStatus = UserConsentStatus.ALL_GRANTED;
+    } else if (marketingConsent) {
+      userConsentStatus = UserConsentStatus.MARKETING_GRANTED;
+    } else if (telemetryConsent) {
+      userConsentStatus = UserConsentStatus.TRACKING_GRANTED;
+    }
+
+    return {
+      userConsentStatus,
+      isMarketingConsentGiven:
+        userConsentStatus === UserConsentStatus.MARKETING_GRANTED ||
+        userConsentStatus === UserConsentStatus.ALL_GRANTED,
+      isTelemetryConsentGiven:
+        userConsentStatus === UserConsentStatus.TRACKING_GRANTED || userConsentStatus === UserConsentStatus.ALL_GRANTED,
+      isTelemetryEnabledAtCurrentEnvironment: isTelemetryEnabledAtCurrentEnvironment(),
+    };
+  }
+
+  checkTelemetrySharingPermission(): void {
+    const isTelemetryPreferenceSet = this.getPreference(PROPERTIES_TYPE.PRIVACY.TELEMETRY_SHARING) !== undefined;
+
+    if (!isTelemetryEnabledAtCurrentEnvironment() || isTelemetryPreferenceSet) {
+      return;
+    }
+
+    const toggleTelemetrySharing = (value: boolean) => {
+      this.savePreference(PROPERTIES_TYPE.PRIVACY.TELEMETRY_SHARING, value);
       this.publishProperties();
     };
 
-    if (!isTelemetryPreferenceSet && isTeamAccount) {
-      this.savePreference(PROPERTIES_TYPE.TELEMETRY_SHARING, true);
-      this.publishProperties();
-    }
-
-    if (isCheckConsentDisabled || isPrivacyPreferenceSet) {
-      return Promise.resolve();
-    }
-
-    if (isTeamAccount) {
-      return Promise.resolve();
-    }
-
-    return new Promise(resolve => {
-      PrimaryModal.show(PrimaryModal.type.CONFIRM, {
-        preventClose: true,
-        primaryAction: {
-          action: () => {
-            enablePrivacy();
-            resolve();
-          },
-          text: t('modalImproveWireAction'),
-        },
-        secondaryAction: {
-          action: () => {
-            this.savePreference(PROPERTIES_TYPE.PRIVACY, false);
-            resolve();
-          },
-          text: t('modalImproveWireSecondary'),
-        },
-        text: {
-          message: t('modalImproveWireMessage', Config.getConfig().BRAND_NAME),
-          title: t('modalImproveWireHeadline', Config.getConfig().BRAND_NAME),
-        },
-      });
+    PrimaryModal.show(PrimaryModalType.CONFIRM, {
+      text: {
+        title: t('dataSharingModalTitle'),
+        htmlMessage: t('dataSharingModalDescription', undefined, replaceLink(Config.getConfig().URL.PRIVACY_POLICY)),
+      },
+      primaryAction: {
+        text: t('dataSharingModalAgree'),
+        action: () => toggleTelemetrySharing(true),
+        runActionOnEnterClick: true,
+      },
+      secondaryAction: {
+        text: t('dataSharingModalDecline'),
+        action: () => toggleTelemetrySharing(false),
+      },
+      closeOnSecondaryAction: true,
     });
   }
 
@@ -178,14 +192,14 @@ export class PropertiesRepository {
   init(selfUserEntity: User): Promise<void> | Promise<WebappProperties> {
     this.selfUser(selfUserEntity);
 
-    return this.selfUser().isTemporaryGuest() ? this.initTemporaryGuestAccount() : this.initActivatedAccount();
+    return this.selfUser()?.isTemporaryGuest() ? this.initTemporaryGuestAccount() : this.initActivatedAccount();
   }
 
   private fetchWebAppAccountSettings(): Promise<void> {
     return this.propertiesService
       .getPropertiesByKey(PropertiesRepository.CONFIG.WEBAPP_ACCOUNT_SETTINGS)
       .then(properties => {
-        $.extend(true, this.properties, properties);
+        deepMerge(this.properties, properties);
       })
       .catch(() => {
         this.logger.warn(
@@ -216,7 +230,6 @@ export class PropertiesRepository {
 
   private initTemporaryGuestAccount(): Promise<WebappProperties> {
     this.logger.info('Temporary guest user: Using default properties');
-    this.savePreference(PROPERTIES_TYPE.PRIVACY, false);
     return Promise.resolve(this.publishProperties());
   }
 
@@ -229,11 +242,11 @@ export class PropertiesRepository {
     if (updatedPreference !== this.getPreference(propertiesType)) {
       this.setPreference(propertiesType, updatedPreference);
 
-      const savePromise = this.selfUser().isTemporaryGuest()
+      const savePromise = this.selfUser()?.isTemporaryGuest()
         ? this.savePreferenceTemporaryGuestAccount(propertiesType, updatedPreference)
         : this.savePreferenceActivatedAccount(propertiesType, updatedPreference);
 
-      savePromise.then(() => this.publishPropertyUpdate(propertiesType, updatedPreference));
+      void savePromise.then(() => this.publishPropertyUpdate(propertiesType, updatedPreference));
     }
   }
 
@@ -262,7 +275,8 @@ export class PropertiesRepository {
         }
         break;
       case PropertiesRepository.CONFIG.WIRE_MARKETING_CONSENT.key:
-        this.marketingConsent(value);
+        this.properties.settings.privacy.marketing_consent = value;
+        this.publishPropertyUpdate(PROPERTIES_TYPE.PRIVACY.MARKETING_CONSENT, value);
         break;
       case PropertiesRepository.CONFIG.WIRE_RECEIPT_MODE.key:
         this.receiptMode(value);
@@ -311,11 +325,11 @@ export class PropertiesRepository {
       case PROPERTIES_TYPE.INTERFACE.THEME:
         amplify.publish(WebAppEvents.PROPERTIES.UPDATE.INTERFACE.THEME, updatedPreference);
         break;
-      case PROPERTIES_TYPE.INTERFACE.VIEW_FOLDERS:
-        amplify.publish(WebAppEvents.PROPERTIES.UPDATE.INTERFACE.VIEW_FOLDERS, updatedPreference);
-        break;
       case PROPERTIES_TYPE.EMOJI.REPLACE_INLINE:
         amplify.publish(WebAppEvents.PROPERTIES.UPDATE.EMOJI.REPLACE_INLINE, updatedPreference);
+        break;
+      case PROPERTIES_TYPE.INTERFACE.MARKDOWN_PREVIEW:
+        amplify.publish(WebAppEvents.PROPERTIES.UPDATE.INTERFACE.MARKDOWN_PREVIEW, updatedPreference);
         break;
       case PROPERTIES_TYPE.ENABLE_DEBUGGING:
         amplify.publish(getLogger.prototype.LOG_ON_DEBUG, updatedPreference);
@@ -326,11 +340,11 @@ export class PropertiesRepository {
       case PROPERTIES_TYPE.PREVIEWS.SEND:
         amplify.publish(WebAppEvents.PROPERTIES.UPDATE.PREVIEWS.SEND, updatedPreference);
         break;
-      case PROPERTIES_TYPE.PRIVACY:
-        amplify.publish(WebAppEvents.PROPERTIES.UPDATE.PRIVACY, updatedPreference);
+      case PROPERTIES_TYPE.PRIVACY.TELEMETRY_SHARING:
+        amplify.publish(WebAppEvents.PROPERTIES.UPDATE.PRIVACY.TELEMETRY_SHARING, updatedPreference);
         break;
-      case PROPERTIES_TYPE.TELEMETRY_SHARING:
-        amplify.publish(WebAppEvents.PROPERTIES.UPDATE.TELEMETRY_SHARING, updatedPreference);
+      case PROPERTIES_TYPE.PRIVACY.MARKETING_CONSENT:
+        amplify.publish(WebAppEvents.PROPERTIES.UPDATE.PRIVACY.MARKETING_CONSENT, updatedPreference);
         break;
       case PROPERTIES_TYPE.SOUND_ALERTS:
         amplify.publish(WebAppEvents.PROPERTIES.UPDATE.SOUND_ALERTS, updatedPreference);
@@ -340,6 +354,9 @@ export class PropertiesRepository {
         break;
       case PROPERTIES_TYPE.CALL.ENABLE_SOUNDLESS_INCOMING_CALLS:
         amplify.publish(WebAppEvents.PROPERTIES.UPDATE.CALL.ENABLE_SOUNDLESS_INCOMING_CALLS, updatedPreference);
+        break;
+      case PROPERTIES_TYPE.CALL.ENABLE_PRESS_SPACE_TO_UNMUTE:
+        amplify.publish(WebAppEvents.PROPERTIES.UPDATE.CALL.ENABLE_PRESS_SPACE_TO_UNMUTE, updatedPreference);
         break;
       default:
         throw new Error(`Failed to update preference of unhandled type '${propertiesType}'`);

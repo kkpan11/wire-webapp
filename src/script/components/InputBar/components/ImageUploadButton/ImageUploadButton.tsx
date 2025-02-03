@@ -21,7 +21,7 @@ import {useRef} from 'react';
 
 import {TabIndex} from '@wireapp/react-ui-kit/lib/types/enums';
 
-import {Icon} from 'Components/Icon';
+import * as Icon from 'Components/Icon';
 import {t} from 'Util/LocalizerUtil';
 
 interface ImageUploadButtonProps {
@@ -50,11 +50,11 @@ export const ImageUploadButton = ({onSelectImages, acceptedImageTypes}: ImageUpl
         type="button"
         aria-label={t('tooltipConversationAddImage')}
         title={t('tooltipConversationAddImage')}
-        className="conversation-button controls-right-button no-radius file-button"
+        className="input-bar-control file-button"
         onClick={() => imageRef.current?.click()}
         data-uie-name="do-share-image"
       >
-        <Icon.Image />
+        <Icon.ImageIcon />
 
         <input
           ref={imageRef}

@@ -25,7 +25,7 @@ import {singleActionButtonStyle} from './SingleAction.styles';
 
 export interface MenuItem {
   click: () => void;
-  icon: string;
+  Icon: React.FC<React.SVGProps<SVGSVGElement>>;
   identifier: string;
   label: string;
 }
@@ -33,20 +33,30 @@ export interface MenuItem {
 export interface SingleActionProps {
   item: MenuItem;
   onCancel: (action: any) => void;
+  oneButtonPerRow?: boolean;
 }
 
-const SingleAction = ({item, onCancel}: SingleActionProps) => {
+const SingleAction = ({item, onCancel, oneButtonPerRow = false}: SingleActionProps) => {
   return (
-    <FlexBox justify="space-evenly" className="modal__buttons">
+    <FlexBox
+      css={{
+        rowGap: 8,
+        columnGap: 16,
+        flexDirection: oneButtonPerRow ? 'column-reverse' : 'row',
+        flexWrap: 'wrap-reverse',
+      }}
+      justify="space-evenly"
+      className="modal__buttons"
+    >
       <Button
         variant={ButtonVariant.SECONDARY}
         onClick={onCancel}
         data-uie-name="do-close"
-        css={singleActionButtonStyle}
+        css={singleActionButtonStyle(oneButtonPerRow)}
       >
         {t('modalConfirmSecondary')}
       </Button>
-      <Button onClick={item.click} data-uie-name={item.identifier} css={singleActionButtonStyle}>
+      <Button onClick={item.click} data-uie-name={item.identifier} css={singleActionButtonStyle(oneButtonPerRow)}>
         {item.label}
       </Button>
     </FlexBox>

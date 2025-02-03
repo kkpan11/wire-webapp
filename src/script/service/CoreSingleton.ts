@@ -40,12 +40,16 @@ export class Core extends Account {
   public key?: Uint8Array;
 
   constructor(apiClient = container.resolve(APIClient)) {
-    const enableCoreCrypto = supportsMLS() || Config.getConfig().FEATURE.USE_CORE_CRYPTO;
+    const {
+      FEATURE: {USE_CORE_CRYPTO, ENABLE_ENCRYPTION_AT_REST},
+    } = Config.getConfig();
+
+    const enableCoreCrypto = supportsMLS() || USE_CORE_CRYPTO;
     super(apiClient, {
       createStore: async (storeName, key) => {
         this.key = key;
         return createStorageEngine(storeName, DatabaseTypes.PERMANENT, {
-          key: Config.getConfig().FEATURE.ENABLE_ENCRYPTION_AT_REST ? key : undefined,
+          key: ENABLE_ENCRYPTION_AT_REST ? key : undefined,
         });
       },
 
@@ -55,18 +59,7 @@ export class Core extends Account {
        * When in a browser context, then this systemCrypto will be undefined and the key generator will then use it's internal encryption system
        */
       systemCrypto: window.systemCrypto ? wrapSystemCrypto(window.systemCrypto) : undefined,
-      coreCryptoConfig: enableCoreCrypto
-        ? {
-            wasmFilePath: '/min/core-crypto.wasm',
-            mls: supportsMLS()
-              ? {
-                  keyingMaterialUpdateThreshold: Config.getConfig().FEATURE.MLS_CONFIG_KEYING_MATERIAL_UPDATE_THRESHOLD,
-                  cipherSuite: Config.getConfig().FEATURE.MLS_CONFIG_DEFAULT_CIPHERSUITE,
-                  useE2EI: Config.getConfig().FEATURE.ENABLE_E2EI,
-                }
-              : undefined,
-          }
-        : undefined,
+      coreCryptoConfig: enableCoreCrypto ? {wasmFilePath: '/min/core-crypto.wasm'} : undefined,
 
       nbPrekeys: 100,
     });

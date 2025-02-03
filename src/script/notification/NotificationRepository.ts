@@ -27,6 +27,7 @@ import {Runtime} from '@wireapp/commons';
 import {Availability} from '@wireapp/protocol-messaging';
 import {WebAppEvents} from '@wireapp/webapp-events';
 
+import {CallingRepository} from 'src/script/calling/CallingRepository';
 import {Declension, t, getUserName} from 'Util/LocalizerUtil';
 import {getLogger, Logger} from 'Util/Logger';
 import {getRenderedTextContent} from 'Util/messageRenderer';
@@ -39,7 +40,7 @@ import {PermissionState} from './PermissionState';
 import {AssetRepository} from '../assets/AssetRepository';
 import {AudioRepository} from '../audio/AudioRepository';
 import {AudioType} from '../audio/AudioType';
-import {CallState} from '../calling/CallState';
+import {CallingViewMode, CallState} from '../calling/CallState';
 import {TERMINATION_REASON} from '../calling/enum/TerminationReason';
 import type {ConnectionEntity} from '../connection/ConnectionEntity';
 import {ConversationEphemeralHandler} from '../conversation/ConversationEphemeralHandler';
@@ -64,15 +65,6 @@ import {PermissionType} from '../permission/PermissionType';
 import {UserState} from '../user/UserState';
 import {Warnings} from '../view_model/WarningsContainer';
 
-export interface Multitasking {
-  isMinimized: ko.Observable<boolean>;
-}
-
-interface ContentViewModelState {
-  multitasking: Multitasking;
-  state: ContentState | null;
-}
-
 type NotificationData = {conversationId?: QualifiedId; messageId?: string; messageType: string};
 interface NotificationContent {
   /** Notification options */
@@ -95,7 +87,6 @@ interface WebappNotifications extends Notification {
  * @see http://www.w3.org/TR/notifications
  */
 export class NotificationRepository {
-  private contentViewModelState: ContentViewModelState;
   private readonly conversationRepository: ConversationRepository;
   private readonly logger: Logger;
   private readonly notifications: WebappNotifications[];
@@ -129,6 +120,7 @@ export class NotificationRepository {
     conversationRepository: ConversationRepository,
     permissionRepository: PermissionRepository,
     private readonly audioRepository: AudioRepository,
+    private readonly callingRepository: CallingRepository,
     private readonly userState = container.resolve(UserState),
     private readonly conversationState = container.resolve(ConversationState),
     private readonly callState = container.resolve(CallState),
@@ -136,10 +128,6 @@ export class NotificationRepository {
     this.assetRepository = container.resolve(AssetRepository);
     this.conversationRepository = conversationRepository;
     this.permissionRepository = permissionRepository;
-    this.contentViewModelState = {
-      multitasking: {isMinimized: (() => false) as ko.Observable<boolean>},
-      state: null,
-    };
 
     this.logger = getLogger('NotificationRepository');
 
@@ -155,10 +143,6 @@ export class NotificationRepository {
     });
 
     this.permissionState = this.permissionRepository.permissionState[PermissionType.NOTIFICATIONS];
-  }
-
-  setContentViewModelStates(state: ContentState, multitasking: {isMinimized: ko.Observable<boolean>}): void {
-    this.contentViewModelState = {multitasking, state};
   }
 
   subscribeToEvents(): void {
@@ -323,9 +307,9 @@ export class NotificationRepository {
           let notificationText;
 
           if (assetEntity.isUserMentioned(this.userState.self().qualifiedId)) {
-            notificationText = t('notificationMention', assetEntity.text, {}, true);
+            notificationText = t('notificationMention', {text: assetEntity.text}, {}, true);
           } else if (messageEntity.isUserQuoted(this.userState.self().id)) {
-            notificationText = t('notificationReply', assetEntity.text, {}, true);
+            notificationText = t('notificationReply', {text: assetEntity.text}, {}, true);
           } else {
             notificationText = getRenderedTextContent(assetEntity.text);
           }
@@ -376,7 +360,7 @@ export class NotificationRepository {
 
       const senderJoined = messageEntity.user().id === otherUserEntity.id;
       if (senderJoined) {
-        return t('notificationMemberJoinSelf', nameOfJoinedUser, {}, true);
+        return t('notificationMemberJoinSelf', {user: nameOfJoinedUser}, {}, true);
       }
 
       const substitutions = {user1: messageEntity.user().name(), user2: nameOfJoinedUser};
@@ -397,7 +381,7 @@ export class NotificationRepository {
   private createBodyMemberLeave(messageEntity: MemberMessage): string | void {
     const updatedOneParticipant = messageEntity.userEntities().length === 1;
     if (updatedOneParticipant && !messageEntity.remoteUserEntities().length) {
-      return t('notificationMemberLeaveRemovedYou', messageEntity.user().name(), {}, true);
+      return t('notificationMemberLeaveRemovedYou', {user: messageEntity.user().name()}, {}, true);
     }
   }
 
@@ -428,7 +412,7 @@ export class NotificationRepository {
       case SystemMessageType.CONNECTION_REQUEST:
         return t('notificationConnectionRequest');
       case SystemMessageType.CONVERSATION_CREATE:
-        return t('notificationConversationCreate', messageEntity.user().name(), {}, true);
+        return t('notificationConversationCreate', {user: messageEntity.user().name()}, {}, true);
     }
   }
 
@@ -490,7 +474,7 @@ export class NotificationRepository {
         const substitutions = {time: timeString, user: messageEntity.user().name()};
         return t('notificationConversationMessageTimerUpdate', substitutions, {}, true);
       }
-      return t('notificationConversationMessageTimerReset', messageEntity.user().name(), {}, true);
+      return t('notificationConversationMessageTimerReset', {user: messageEntity.user().name()}, {}, true);
     };
 
     const createBodyRename = () => {
@@ -600,7 +584,7 @@ export class NotificationRepository {
     const canShowUserImage = userEntity.previewPictureResource() && !shouldObfuscateSender;
     if (canShowUserImage) {
       try {
-        return await this.assetRepository.generateAssetUrl(userEntity.previewPictureResource());
+        return await this.assetRepository.getObjectUrl(userEntity.previewPictureResource());
       } catch (error) {
         if (error instanceof ValidationUtilError) {
           this.logger.error(`Failed to validate an asset URL: ${error.message}`);
@@ -835,7 +819,8 @@ export class NotificationRepository {
       : false;
     const {contentState} = useAppState.getState();
     const inConversationView = contentState === ContentState.CONVERSATION;
-    const inMaximizedCall = !!this.callState.joinedCall() && !this.contentViewModelState.multitasking.isMinimized();
+    const inMaximizedCall =
+      !!this.callState.joinedCall() && this.callState.viewMode() === CallingViewMode.DETACHED_WINDOW;
 
     const activeConversation = document.hasFocus() && inConversationView && inActiveConversation && !inMaximizedCall;
     const messageFromSelf = messageEntity.user().isMe;
@@ -868,10 +853,6 @@ export class NotificationRepository {
    * @param notificationContent Content of notification
    */
   private showNotificationInBrowser(notificationContent: NotificationContent): void {
-    /*
-     * Note: Notification.data is only supported on Chrome.
-     * See https://developer.mozilla.org/en-US/docs/Web/API/Notification/data
-     */
     this.removeReadNotifications();
     const notification: WebappNotifications = new window.Notification(
       notificationContent.title,
@@ -884,7 +865,7 @@ export class NotificationRepository {
     notification.onclick = () => {
       amplify.publish(WebAppEvents.NOTIFICATION.CLICK);
       window.focus();
-      this.contentViewModelState.multitasking.isMinimized(true);
+      void this.callingRepository.setViewModeMinimized();
       notificationContent.trigger();
 
       this.logger.info(`Notification for ${messageInfo} in '${conversationId?.id || conversationId}' closed by click.`);

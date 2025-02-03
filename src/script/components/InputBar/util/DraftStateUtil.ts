@@ -24,33 +24,50 @@ import {StorageKey, StorageRepository} from '../../../storage';
 
 export interface DraftState {
   editorState: string | null;
-  messageReply?: Promise<ContentMessage>;
+  messageReply?: ContentMessage;
+  editedMessage?: ContentMessage;
+  plainMessage?: string;
 }
 
-const generateConversationInputStorageKey = (conversationEntity: Conversation): string =>
+export const generateConversationInputStorageKey = (conversationEntity: Conversation): string =>
   `${StorageKey.CONVERSATION.INPUT}|${conversationEntity.id}`;
 
-export const saveDraftState = async (
-  storageRepository: StorageRepository,
-  conversationEntity: Conversation,
-  editorState: string,
-  replyMessageId?: string,
-): Promise<void> => {
-  // we only save state for newly written messages
-  const storageKey = generateConversationInputStorageKey(conversationEntity);
+type SaveDraftState = {
+  storageRepository: StorageRepository;
+  conversation: Conversation;
+  editorState: string;
+  plainMessage: string;
+  replyId?: string;
+  editedMessageId?: string;
+};
 
-  await storageRepository.storageService.saveToSimpleStorage<any>(storageKey, {
+export const saveDraftState = async ({
+  storageRepository,
+  conversation,
+  editorState,
+  plainMessage,
+  replyId,
+  editedMessageId,
+}: SaveDraftState): Promise<void> => {
+  // we only save state for newly written messages
+  const storageKey = generateConversationInputStorageKey(conversation);
+
+  await storageRepository.storageService.saveToSimpleStorage<
+    Omit<SaveDraftState, 'storageRepository' | 'conversation'>
+  >(storageKey, {
     editorState,
-    replyId: replyMessageId,
+    plainMessage,
+    replyId,
+    editedMessageId,
   });
 };
 
 export const loadDraftState = async (
-  conversationEntity: Conversation,
+  conversation: Conversation,
   storageRepository: StorageRepository,
   messageRepository: MessageRepository,
 ): Promise<DraftState> => {
-  const storageKey = generateConversationInputStorageKey(conversationEntity);
+  const storageKey = generateConversationInputStorageKey(conversation);
   const storageValue = await storageRepository.storageService.loadFromSimpleStorage<any>(storageKey);
 
   if (typeof storageValue === 'undefined') {
@@ -58,16 +75,25 @@ export const loadDraftState = async (
   }
 
   const replyMessageId = storageValue?.replyId;
+  const editedMessageId = storageValue?.editedMessageId;
 
   let messageReply = null;
 
-  if (replyMessageId) {
+  const loadMessage = async (messageId: string) => {
     const message =
-      (await messageRepository.getMessageInConversationById(conversationEntity, replyMessageId)) ||
-      (await messageRepository.getMessageInConversationByReplacementId(conversationEntity, replyMessageId));
+      (await messageRepository.getMessageInConversationById(conversation, messageId)) ||
+      (await messageRepository.getMessageInConversationByReplacementId(conversation, messageId));
+    return messageRepository.ensureMessageSender(message);
+  };
 
-    messageReply = messageRepository.ensureMessageSender(message) as Promise<ContentMessage>;
+  if (replyMessageId) {
+    messageReply = await loadMessage(replyMessageId);
   }
 
-  return {...storageValue, messageReply};
+  let editedMessage = null;
+  if (editedMessageId) {
+    editedMessage = await loadMessage(editedMessageId);
+  }
+
+  return {...storageValue, messageReply, editedMessage, plainMessage: storageValue?.plainMessage || ''};
 };

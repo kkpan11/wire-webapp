@@ -24,11 +24,12 @@ enum EMOJI {
 enum CALL {
   ENABLE_SOUNDLESS_INCOMING_CALLS = 'settings.call.enable_soundless_incoming_calls',
   ENABLE_VBR_ENCODING = 'settings.call.enable_vbr_encoding',
+  ENABLE_PRESS_SPACE_TO_UNMUTE = 'settings.call.enable_press_space_to_unmute',
 }
 
 enum INTERFACE {
   THEME = 'settings.interface.theme',
-  VIEW_FOLDERS = 'settings.interface.view_folders',
+  MARKDOWN_PREVIEW = 'settings.interface.markdown_preview',
 }
 
 enum PREVIEWS {
@@ -38,10 +39,13 @@ enum PREVIEWS {
 enum PROPERTIES {
   ENABLE_DEBUGGING = 'enable_debugging',
   NOTIFICATIONS = 'settings.notifications',
-  PRIVACY = 'settings.privacy.improve_wire',
   SOUND_ALERTS = 'settings.sound.alerts',
-  TELEMETRY_SHARING = 'settings.privacy.telemetry_sharing',
   VERSION = 'version',
+}
+
+enum PRIVACY {
+  TELEMETRY_SHARING = 'settings.privacy.telemetry_data_sharing',
+  MARKETING_CONSENT = 'settings.privacy.marketing_consent',
 }
 
 export const PROPERTIES_TYPE = {
@@ -50,4 +54,12 @@ export const PROPERTIES_TYPE = {
   EMOJI,
   INTERFACE,
   PREVIEWS,
+  PRIVACY,
 };
+
+export enum UserConsentStatus {
+  ALL_DENIED = 'ALL_DENIED',
+  ALL_GRANTED = 'ALL_GRANTED',
+  TRACKING_GRANTED = 'TRACKING_GRANTED',
+  MARKETING_GRANTED = 'MARKETING_GRANTED',
+}

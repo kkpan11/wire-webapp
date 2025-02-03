@@ -114,7 +114,6 @@ const RightSidebar: FC<RightSidebarProps> = ({
   const conversationState = container.resolve(ConversationState);
   const {activeConversation} = useKoSubscribableChildren(conversationState, ['activeConversation']);
 
-  const [isAddMode, setIsAddMode] = useState<boolean>(false);
   const [animatePanelToLeft, setAnimatePanelToLeft] = useState<boolean>(true);
 
   const {rightSidebar} = useAppMainState.getState();
@@ -130,10 +129,9 @@ const RightSidebar: FC<RightSidebarProps> = ({
 
   const closePanel = () => rightSidebar.close();
 
-  const togglePanel = (newState: PanelState, entity: PanelEntity | null, addMode: boolean = false) => {
+  const togglePanel = (newState: PanelState, entity: PanelEntity | null, isAddMode: boolean = false) => {
     setAnimatePanelToLeft(true);
-    rightSidebar.goTo(newState, {entity});
-    setIsAddMode(addMode);
+    rightSidebar.goTo(newState, {entity, isAddMode});
   };
 
   const onBackClick = (entity: PanelEntity | null = activeConversation || null) => {
@@ -217,6 +215,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
 
           {currentState === PanelState.GROUP_PARTICIPANT_USER && userEntity && (
             <GroupParticipantUser
+              key={userEntity.id}
               onBack={onBackClick}
               onClose={closePanel}
               goToRoot={goToRoot}
@@ -263,7 +262,7 @@ const RightSidebar: FC<RightSidebarProps> = ({
 
           {(currentState === PanelState.GUEST_OPTIONS || currentState === PanelState.SERVICES_OPTIONS) && (
             <GuestServicesOptions
-              isPasswordSupported={false} // TODO: change to "core?.backendFeatures.supportsGuestLinksWithPassword" when other clients implement passwords
+              isPasswordSupported={core?.backendFeatures.supportsGuestLinksWithPassword}
               isGuest={currentState === PanelState.GUEST_OPTIONS}
               activeConversation={activeConversation}
               conversationRepository={conversationRepository}
@@ -284,9 +283,8 @@ const RightSidebar: FC<RightSidebarProps> = ({
               onBack={onBackClick}
               onClose={closePanel}
               serviceEntity={serviceEntity}
-              userEntity={userServiceEntity}
               selfUser={selfUser}
-              isAddMode={isAddMode}
+              isAddMode={rightSidebar.isAddMode}
             />
           )}
 

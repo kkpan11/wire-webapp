@@ -23,6 +23,7 @@ import ko from 'knockout';
 
 import {WebAppEvents} from '@wireapp/webapp-events';
 
+import {SidebarTabs, useSidebarStore} from 'src/script/page/LeftSidebar/panels/Conversations/useSidebarStore';
 import {t} from 'Util/LocalizerUtil';
 import {getLogger, Logger} from 'Util/Logger';
 import {TypedEventTarget} from 'Util/TypedEventTarget';
@@ -72,19 +73,12 @@ export const createLabel = (
   type,
 });
 
-export const createLabelGroups = (groups: Conversation[] = []) =>
-  createLabel(t('conversationLabelGroups'), groups, DefaultLabelIds.Groups);
-
-export const createLabelPeople = (contacts: Conversation[] = []) =>
-  createLabel(t('conversationLabelPeople'), contacts, DefaultLabelIds.Contacts);
-
-export const createLabelFavorites = (favorites: Conversation[] = []) =>
-  createLabel(t('conversationLabelFavorites'), favorites, DefaultLabelIds.Favorites);
-
 export class ConversationLabelRepository extends TypedEventTarget<{type: 'conversation-favorited'}> {
   labels: ko.ObservableArray<ConversationLabel>;
   private allLabeledConversations: ko.Computed<Conversation[]>;
   private logger: Logger;
+
+  static LocalStorageKey = 'CONVERSATION_LABEL_REPOSITORY_PROPERTIES';
 
   constructor(
     private readonly allConversations: ko.ObservableArray<Conversation>,
@@ -111,6 +105,7 @@ export class ConversationLabelRepository extends TypedEventTarget<{type: 'conver
       name,
       type,
     }));
+
     return {labels: labelJson};
   };
 
@@ -129,20 +124,37 @@ export class ConversationLabelRepository extends TypedEventTarget<{type: 'conver
         type,
       }),
     );
+
     this.labels(labels);
   };
 
   readonly saveLabels = () => {
-    this.propertiesService.putPropertiesByKey(propertiesKey, this.marshal());
+    const conversationLabelJson = this.marshal();
+    void this.propertiesService.putPropertiesByKey(propertiesKey, conversationLabelJson);
+    this.persistValues();
   };
 
   loadLabels = async () => {
     try {
+      const conversationLabelJson = localStorage.getItem(ConversationLabelRepository.LocalStorageKey);
+
+      if (conversationLabelJson) {
+        this.unmarshal(JSON.parse(conversationLabelJson));
+        this.saveLabels();
+        return;
+      }
+
       const labelProperties = await this.propertiesService.getPropertiesByKey(propertiesKey);
       this.unmarshal(labelProperties);
+      this.persistValues();
     } catch (error) {
       this.logger.warn(`No labels were loaded: ${error.message}`);
     }
+  };
+
+  private persistValues = () => {
+    const values = this.marshal();
+    localStorage.setItem(ConversationLabelRepository.LocalStorageKey, JSON.stringify(values));
   };
 
   readonly onUserEvent = (event: any) => {
@@ -174,23 +186,44 @@ export class ConversationLabelRepository extends TypedEventTarget<{type: 'conver
   readonly isFavorite = (conversation: Conversation): boolean => this.getFavorites().includes(conversation);
 
   readonly addConversationToFavorites = (addedConversation: Conversation): void => {
-    let favoriteLabel = this.getFavoriteLabel();
-    if (!favoriteLabel) {
+    // update the reference to the favorite label in the labels array to trigger a rerender
+    const favoriteLabel = this.getFavoriteLabel();
+    const updatedLabel = createLabel(
+      '',
+      [...(favoriteLabel?.conversations() || []), addedConversation],
+      undefined,
+      LabelType.Favorite,
+    );
+
+    if (favoriteLabel) {
+      const folderIndex = this.labels.indexOf(favoriteLabel);
+      this.labels.splice(folderIndex, 1, updatedLabel);
+    } else {
       // The favorite label doesn't need a name since it is set at runtime for i18n compatibility
-      favoriteLabel = createLabel('', undefined, undefined, LabelType.Favorite);
-      this.labels.push(favoriteLabel);
+      this.labels.push(updatedLabel);
     }
-    favoriteLabel.conversations.push(addedConversation);
     this.dispatch({type: 'conversation-favorited'});
     this.saveLabels();
   };
 
   readonly removeConversationFromFavorites = (removedConversation: Conversation): void => {
+    // update the reference to the favorite label in the labels array to trigger a rerender
     const favoriteLabel = this.getFavoriteLabel();
     if (favoriteLabel) {
-      favoriteLabel.conversations(
+      const updatedLabel = createLabel(
+        '',
         favoriteLabel.conversations().filter(conversation => conversation !== removedConversation),
+        undefined,
+        LabelType.Favorite,
       );
+      const folderIndex = this.labels.indexOf(favoriteLabel);
+      this.labels.splice(folderIndex, 1, updatedLabel);
+
+      // trigger a rerender on sidebar to remove the conversation from favorites
+      const {currentTab, setCurrentTab} = useSidebarStore.getState();
+      if (currentTab === SidebarTabs.FAVORITES) {
+        setCurrentTab(SidebarTabs.FAVORITES);
+      }
     }
     this.saveLabels();
   };
@@ -227,9 +260,27 @@ export class ConversationLabelRepository extends TypedEventTarget<{type: 'conver
       .sort(({name: nameA}, {name: nameB}) => nameA.localeCompare(nameB, undefined, {sensitivity: 'base'}));
 
   readonly removeConversationFromLabel = (label: ConversationLabel, removeConversation: Conversation): void => {
-    label.conversations(label.conversations().filter(conversation => conversation !== removeConversation));
+    const {setCurrentTab} = useSidebarStore.getState();
+
+    // Remove conversation from folder and update folder in labels
+    const folderIndex = this.labels.indexOf(label);
+    const updatedFolder = createLabel(
+      label.name,
+      label.conversations().filter(conversation => conversation !== removeConversation),
+      label.id,
+      label.type,
+    );
+
+    this.labels.splice(folderIndex, 1, updatedFolder);
+
+    // Delete folder if it no longer contains any conversation
     if (!label.conversations().length) {
       this.labels.remove(label);
+      // switch sidebar to recent tabs
+      setCurrentTab(SidebarTabs.RECENT);
+    } else {
+      // trigger rerender on folders to remove conversation from folder
+      setCurrentTab(SidebarTabs.FOLDER);
     }
     this.saveLabels();
   };
@@ -250,15 +301,18 @@ export class ConversationLabelRepository extends TypedEventTarget<{type: 'conver
   };
 
   readonly addConversationToLabel = (label: ConversationLabel, conversation: Conversation): void => {
+    const {setCurrentTab} = useSidebarStore.getState();
     if (!label.conversations().includes(conversation)) {
       this.removeConversationFromAllLabels(conversation);
       label.conversations.push(conversation);
       amplify.publish(WebAppEvents.CONTENT.EXPAND_FOLDER, label.id);
       this.saveLabels();
+      setCurrentTab(SidebarTabs.FOLDER);
     }
   };
 
   readonly addConversationToNewLabel = (conversation: Conversation) => {
+    const {setCurrentTab} = useSidebarStore.getState();
     PrimaryModal.show(PrimaryModal.type.INPUT, {
       primaryAction: {
         action: (name: string) => {
@@ -267,6 +321,7 @@ export class ConversationLabelRepository extends TypedEventTarget<{type: 'conver
           this.labels.push(newFolder);
           amplify.publish(WebAppEvents.CONTENT.EXPAND_FOLDER, newFolder.id);
           this.saveLabels();
+          setCurrentTab(SidebarTabs.FOLDER);
         },
         text: t('modalCreateFolderAction'),
       },

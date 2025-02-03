@@ -24,7 +24,7 @@ import {container} from 'tsyringe';
 
 import {RestrictedFile} from 'Components/asset/RestrictedFile';
 import {useKoSubscribableChildren} from 'Util/ComponentUtil';
-import {handleKeyDown} from 'Util/KeyboardUtil';
+import {handleKeyDown, KEY} from 'Util/KeyboardUtil';
 import {t} from 'Util/LocalizerUtil';
 import {formatBytes, getFileExtension, trimFileExtension} from 'Util/util';
 
@@ -60,7 +60,7 @@ const FileAsset: React.FC<FileAssetProps> = ({
   const messageFocusedTabIndex = useMessageFocusedTabIndex(isFocusable);
 
   const fileName = trimFileExtension(asset.file_name);
-  const fileExtension = getFileExtension(asset.file_name);
+  const fileExtension = getFileExtension(asset.file_name!);
   const formattedFileSize = formatBytes(asset.file_size);
 
   // This is a hack since we don't have a FileAsset available before it's
@@ -71,15 +71,16 @@ const FileAsset: React.FC<FileAssetProps> = ({
 
   const isPendingUpload = assetStatus === AssetTransferState.UPLOAD_PENDING;
   const isFailedUpload = assetStatus === AssetTransferState.UPLOAD_FAILED;
-  const isUploaded = assetStatus === AssetTransferState.UPLOADED;
+  const isUploadedOrCancelled =
+    assetStatus === AssetTransferState.UPLOADED || assetStatus === AssetTransferState.CANCELED;
   const isDownloading = assetStatus === AssetTransferState.DOWNLOADING;
   const isFailedDownloadingDecrypt = assetStatus === AssetTransferState.DOWNLOAD_FAILED_DECRPYT;
   const isFailedDownloadingHash = assetStatus === AssetTransferState.DOWNLOAD_FAILED_HASH;
   const isUploading = assetStatus === AssetTransferState.UPLOADING;
 
   const onDownloadAsset = async () => {
-    if (isUploaded) {
-      downloadAsset(asset);
+    if (isUploadedOrCancelled) {
+      await downloadAsset(asset);
     }
   };
 
@@ -94,7 +95,7 @@ const FileAsset: React.FC<FileAssetProps> = ({
       {isFileSharingReceivingEnabled ? (
         <div
           className={cx('file', {
-            'cursor-pointer': isUploaded,
+            'cursor-pointer': isUploadedOrCancelled,
           })}
           data-uie-name="file"
           data-uie-value={asset.file_name}
@@ -102,13 +103,13 @@ const FileAsset: React.FC<FileAssetProps> = ({
           tabIndex={messageFocusedTabIndex}
           aria-label={`${t('conversationContextMenuDownload')} ${fileName}.${fileExtension}`}
           onClick={onDownloadAsset}
-          onKeyDown={event => handleKeyDown(event, onDownloadAsset)}
+          onKeyDown={event => handleKeyDown({event, callback: onDownloadAsset, keys: [KEY.ENTER, KEY.SPACE]})}
         >
           {isPendingUpload ? (
             <div className="asset-placeholder loading-dots" />
           ) : (
             <>
-              {isUploaded && (
+              {isUploadedOrCancelled && (
                 <div className="file__icon icon-file" data-uie-name="file-icon">
                   <span className="file__icon__ext icon-view" />
                 </div>

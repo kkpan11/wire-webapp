@@ -19,18 +19,19 @@
 
 import {FC, useMemo, useState} from 'react';
 
+import {ConversationProtocol} from '@wireapp/api-client/lib/conversation';
 import {TabIndex} from '@wireapp/react-ui-kit/lib/types/enums';
 import cx from 'classnames';
 
 import {Button, ButtonVariant} from '@wireapp/react-ui-kit';
 
 import {FadingScrollbar} from 'Components/FadingScrollbar';
-import {Icon} from 'Components/Icon';
+import * as Icon from 'Components/Icon';
 import {SearchInput} from 'Components/SearchInput';
 import {ServiceList} from 'Components/ServiceList/ServiceList';
 import {UserSearchableList} from 'Components/UserSearchableList';
 import {useKoSubscribableChildren} from 'Util/ComponentUtil';
-import {handleKeyDown} from 'Util/KeyboardUtil';
+import {handleKeyDown, KEY} from 'Util/KeyboardUtil';
 import {t} from 'Util/LocalizerUtil';
 import {safeWindowOpen} from 'Util/SanitizationUtil';
 import {sortUsersByPriority} from 'Util/StringUtil';
@@ -126,7 +127,7 @@ const AddParticipants: FC<AddParticipantsProps> = ({
   const enabledAddAction = selectedContacts.length > ENABLE_ADD_ACTIONS_LENGTH;
 
   const headerText = selectedContacts.length
-    ? t('addParticipantsHeaderWithCounter', selectedContacts.length)
+    ? t('addParticipantsHeaderWithCounter', {number: selectedContacts.length})
     : t('addParticipantsHeader');
 
   const showIntegrations = useMemo(() => {
@@ -134,7 +135,14 @@ const AddParticipants: FC<AddParticipantsProps> = ({
     const isService = !!firstUserEntity?.isService;
     const allowIntegrations = isGroup || isService;
 
-    return isTeam && allowIntegrations && inTeam && !isTeamOnly && isServicesEnabled;
+    return (
+      isTeam &&
+      allowIntegrations &&
+      inTeam &&
+      !isTeamOnly &&
+      isServicesEnabled &&
+      activeConversation.protocol !== ConversationProtocol.MLS
+    );
   }, [firstUserEntity?.isService, inTeam, isGroup, isGuestAndServicesRoom, isServicesRoom, isTeam, isTeamOnly]);
 
   const manageServicesUrl = getManageServicesUrl('client_landing');
@@ -189,6 +197,7 @@ const AddParticipants: FC<AddParticipantsProps> = ({
         onClose={onClose}
         title={headerText}
         titleDataUieName="status-people-selected"
+        shouldFocusFirstButton={false}
       />
 
       <div className="panel__content panel__content--fill">
@@ -196,7 +205,6 @@ const AddParticipants: FC<AddParticipantsProps> = ({
           input={searchInput}
           setInput={onSearchInput}
           selectedUsers={selectedContacts}
-          setSelectedUsers={setSelectedContacts}
           placeholder={t('addParticipantsSearchPlaceholder')}
         />
 
@@ -207,7 +215,13 @@ const AddParticipants: FC<AddParticipantsProps> = ({
               tabIndex={TabIndex.FOCUSABLE}
               className={cx('panel__tab', {'panel__tab--active': isAddPeopleState})}
               onClick={onAddPeople}
-              onKeyDown={event => handleKeyDown(event, onAddPeople)}
+              onKeyDown={event =>
+                handleKeyDown({
+                  event,
+                  callback: onAddPeople,
+                  keys: [KEY.ENTER, KEY.SPACE],
+                })
+              }
               data-uie-name="do-add-people"
             >
               {t('addParticipantsTabsPeople')}
@@ -218,7 +232,13 @@ const AddParticipants: FC<AddParticipantsProps> = ({
               tabIndex={TabIndex.FOCUSABLE}
               className={cx('panel__tab', {'panel__tab--active': isAddServiceState})}
               onClick={onAddServices}
-              onKeyDown={event => handleKeyDown(event, onAddServices)}
+              onKeyDown={event =>
+                handleKeyDown({
+                  event,
+                  callback: onAddServices,
+                  keys: [KEY.ENTER, KEY.SPACE],
+                })
+              }
               data-uie-name="do-add-services"
             >
               {t('addParticipantsTabsServices')}
@@ -240,6 +260,7 @@ const AddParticipants: FC<AddParticipantsProps> = ({
               selfUser={selfUser}
               isSelectable
               allowRemoteSearch
+              filterRemoteTeamUsers
             />
           )}
 
@@ -254,11 +275,17 @@ const AddParticipants: FC<AddParticipantsProps> = ({
                         tabIndex={TabIndex.FOCUSABLE}
                         className="left-list-item left-list-item-clickable"
                         onClick={openManageServices}
-                        onKeyDown={event => handleKeyDown(event, openManageServices)}
+                        onKeyDown={event =>
+                          handleKeyDown({
+                            event,
+                            callback: openManageServices,
+                            keys: [KEY.ENTER, KEY.SPACE],
+                          })
+                        }
                         data-uie-name="go-manage-services"
                       >
                         <div className="left-column-icon left-column-icon-dark">
-                          <Icon.Service />
+                          <Icon.ServiceIcon />
                         </div>
 
                         <div className="column-center">{t('addParticipantsManageServices')}</div>
@@ -272,7 +299,7 @@ const AddParticipants: FC<AddParticipantsProps> = ({
 
               {!services.length && !isInitialServiceSearch && (
                 <div className="search__no-services">
-                  <Icon.Service className="search__no-services__icon" />
+                  <Icon.ServiceIcon className="search__no-services__icon" />
 
                   {canManageServices() && !!manageServicesUrl && (
                     <>
@@ -285,7 +312,13 @@ const AddParticipants: FC<AddParticipantsProps> = ({
                         type="button"
                         tabIndex={TabIndex.FOCUSABLE}
                         onClick={openManageServices}
-                        onKeyDown={event => handleKeyDown(event, openManageServices)}
+                        onKeyDown={event =>
+                          handleKeyDown({
+                            event,
+                            callback: openManageServices,
+                            keys: [KEY.ENTER, KEY.SPACE],
+                          })
+                        }
                         data-uie-name="go-enable-services"
                         style={{marginTop: '1em'}}
                       >

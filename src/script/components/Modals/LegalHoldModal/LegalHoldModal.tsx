@@ -23,11 +23,12 @@ import {LegalHoldMemberStatus} from '@wireapp/api-client/lib/team/legalhold/';
 import cx from 'classnames';
 import {StatusCodes as HTTP_STATUS} from 'http-status-codes';
 
-import {Icon} from 'Components/Icon';
+import * as Icon from 'Components/Icon';
 import {LegalHoldDot} from 'Components/LegalHoldDot';
-import {ModalComponent} from 'Components/ModalComponent';
-import {useUserDevicesHistory, UserDevicesState, UserDevices} from 'Components/UserDevices';
+import {ModalComponent} from 'Components/Modals/ModalComponent';
+import {UserDevicesState, UserDevices} from 'Components/UserDevices';
 import {UserSearchableList} from 'Components/UserSearchableList';
+import {useUserDevicesHistory} from 'Hooks/useUserDevicesHistory';
 import {handleEnterDown} from 'Util/KeyboardUtil';
 import {t} from 'Util/LocalizerUtil';
 
@@ -307,7 +308,7 @@ const LegalHoldModal: FC<LegalHoldModalProps> = ({
             onClick={onBackClick}
             data-uie-name="go-back-participant-devices"
           >
-            <Icon.ArrowLeft />
+            <Icon.ArrowLeftIcon />
           </button>
         )}
 
@@ -317,7 +318,7 @@ const LegalHoldModal: FC<LegalHoldModalProps> = ({
           </h2>
         ) : (
           <button className="button-reset-default modal__header__button" data-uie-name="do-close" onClick={onBgClick}>
-            <Icon.Close />
+            <Icon.CloseIcon />
           </button>
         )}
       </div>
@@ -328,14 +329,10 @@ const LegalHoldModal: FC<LegalHoldModalProps> = ({
             <div className="modal__text" data-uie-name="status-modal-text">
               <p
                 dangerouslySetInnerHTML={{
-                  __html: t(
-                    'legalHoldModalText',
-                    {},
-                    {
-                      br: '<br>',
-                      fingerprint: `<span class="legal-hold-modal__fingerprint" data-uie-name="status-modal-fingerprint">${fingerprint}</span>`,
-                    },
-                  ),
+                  __html: t('legalHoldModalText', undefined, {
+                    br: '<br>',
+                    fingerprint: `<span class="legal-hold-modal__fingerprint" data-uie-name="status-modal-fingerprint">${fingerprint}</span>`,
+                  }),
                 }}
               />
 
@@ -380,7 +377,7 @@ const LegalHoldModal: FC<LegalHoldModalProps> = ({
                 </button>
               ) : (
                 <div className="modal__button modal__button--primary legal-hold-modal__loading-button">
-                  <Icon.Loading />
+                  <Icon.LoadingIcon />
                 </div>
               )}
             </div>

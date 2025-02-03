@@ -20,12 +20,15 @@
 import React, {useCallback, useEffect, useState} from 'react';
 
 import {TabIndex} from '@wireapp/react-ui-kit/lib/types/enums';
+import {amplify} from 'amplify';
 import cx from 'classnames';
 import {container} from 'tsyringe';
 
-import {useTimeout} from '@wireapp/react-ui-kit';
+import {Button, ButtonVariant, useTimeout} from '@wireapp/react-ui-kit';
+import {WebAppEvents} from '@wireapp/webapp-events';
 
 import {RestrictedVideo} from 'Components/asset/RestrictedVideo';
+import {EventName} from 'src/script/tracking/EventName';
 import {useKoSubscribableChildren} from 'Util/ComponentUtil';
 import {t} from 'Util/LocalizerUtil';
 import {formatSeconds} from 'Util/TimeUtil';
@@ -33,12 +36,14 @@ import {useEffectRef} from 'Util/useEffectRef';
 
 import {MediaButton} from './controls/MediaButton';
 import {SeekBar} from './controls/SeekBar';
+import {FileAsset} from './FileAssetComponent';
 import {AssetUrl, useAssetTransfer} from './useAssetTransfer';
 
+import {AssetError} from '../../../../../assets/AssetError';
 import {AssetRepository} from '../../../../../assets/AssetRepository';
 import {AssetTransferState} from '../../../../../assets/AssetTransferState';
 import type {ContentMessage} from '../../../../../entity/message/ContentMessage';
-import type {FileAsset} from '../../../../../entity/message/FileAsset';
+import type {FileAsset as FileAssetType} from '../../../../../entity/message/FileAsset';
 import {TeamState} from '../../../../../team/TeamState';
 
 interface VideoAssetProps {
@@ -55,7 +60,7 @@ const VideoAsset: React.FC<VideoAssetProps> = ({
   teamState = container.resolve(TeamState),
   isFocusable = true,
 }) => {
-  const asset = message.getFirstAsset() as FileAsset;
+  const asset = message.getFirstAsset() as FileAssetType;
   const {isObfuscated} = useKoSubscribableChildren(message, ['isObfuscated']);
   const {preview_resource: assetPreviewResource} = useKoSubscribableChildren(asset, ['preview_resource']);
   const [videoPlaybackError, setVideoPlaybackError] = useState(false);
@@ -64,9 +69,10 @@ const VideoAsset: React.FC<VideoAssetProps> = ({
   const [videoSrc, setVideoSrc] = useState<AssetUrl>();
   const [videoElement, setVideoElement] = useEffectRef<HTMLVideoElement>();
   const [isVideoLoaded, setIsVideoLoaded] = useState(false);
+
   const {isFileSharingReceivingEnabled} = useKoSubscribableChildren(teamState, ['isFileSharingReceivingEnabled']);
   const [displaySmall, setDisplaySmall] = useState(!!isQuote);
-  const {transferState, isUploading, isPendingUpload, uploadProgress, cancelUpload, getAssetUrl} =
+  const {transferState, isUploading, isPendingUpload, uploadProgress, cancelUpload, getAssetUrl, downloadAsset} =
     useAssetTransfer(message);
 
   const [hideControls, setHideControls] = useState(false);
@@ -77,11 +83,46 @@ const VideoAsset: React.FC<VideoAssetProps> = ({
     if (assetPreviewResource && isFileSharingReceivingEnabled) {
       getAssetUrl(assetPreviewResource).then(setVideoPreview);
     }
+
     return () => {
       videoPreview?.dispose();
       videoSrc?.dispose();
     };
   }, []);
+
+  // Initial check if video is supported with `canPlayType` method, which checks for MIME type, e.g. 'video/mp4' or 'video/mov'.
+  // It's not 100% reliable (e.g. doesn't check codecs), but it's synchorous, which is helpful for initial rendering.
+  const isVideoMimeTypeSupported = (mimeType: string): boolean => {
+    const video = document.createElement('video');
+    const canPlay = video.canPlayType(mimeType) !== '';
+
+    if (!canPlay) {
+      amplify.publish(WebAppEvents.ANALYTICS.EVENT, EventName.MESSAGES.VIDEO.PLAY_FAILED);
+      amplify.publish(WebAppEvents.ANALYTICS.EVENT, EventName.MESSAGES.VIDEO.UNSUPPORTED_MIME_TYPE);
+    }
+
+    return canPlay;
+  };
+
+  // Advanced check for video playability.
+  // It's more reliable than `isVideoMimeTypeSupported` (e.g. checks for codecs), but it's async, so it's not suitable for initial rendering.
+  // It's used when user tries to play the video.
+  const isVideoPlayable = async (url: string): Promise<boolean> => {
+    const video = document.createElement('video');
+    return new Promise<boolean>(resolve => {
+      video.onloadedmetadata = () => {
+        // Detects is the video track is properly available.
+        // If these dimensions are 0, typically the video track can't be properly decoded/rendered.
+        if (video.videoWidth === 0 || video.videoHeight === 0) {
+          resolve(false);
+          return;
+        }
+        resolve(true);
+      };
+      video.onerror = () => resolve(false);
+      video.src = url;
+    });
+  };
 
   const onPlayButtonClicked = async (): Promise<void> => {
     if (isFileSharingReceivingEnabled) {
@@ -93,10 +134,26 @@ const VideoAsset: React.FC<VideoAssetProps> = ({
         asset.status(AssetTransferState.DOWNLOADING);
 
         try {
-          const url = await getAssetUrl(asset.original_resource());
-          setVideoSrc(url);
+          const assetUrl = await getAssetUrl(asset.original_resource());
+          const playable = await isVideoPlayable(assetUrl.url);
+
+          if (!playable) {
+            amplify.publish(WebAppEvents.ANALYTICS.EVENT, EventName.MESSAGES.VIDEO.PLAY_FAILED);
+            amplify.publish(WebAppEvents.ANALYTICS.EVENT, EventName.MESSAGES.VIDEO.UNPLAYABLE_ERROR);
+            setVideoPlaybackError(true);
+            return;
+          }
+
+          setVideoSrc(assetUrl);
           setIsVideoLoaded(true);
+          amplify.publish(WebAppEvents.ANALYTICS.EVENT, EventName.MESSAGES.VIDEO.PLAY_SUCCESS);
         } catch (error) {
+          if (error instanceof Error) {
+            if (error.name !== AssetError.CANCEL_ERROR) {
+              setVideoPlaybackError(true);
+            }
+          }
+          amplify.publish(WebAppEvents.ANALYTICS.EVENT, EventName.MESSAGES.VIDEO.PLAY_FAILED);
           console.error('Failed to load video asset ', error);
         }
 
@@ -132,7 +189,15 @@ const VideoAsset: React.FC<VideoAssetProps> = ({
     }
   };
 
-  return !isObfuscated ? (
+  if (isObfuscated) {
+    return null;
+  }
+
+  if (!isVideoMimeTypeSupported(asset.file_type || '')) {
+    return <FileAsset message={message} isFocusable={isFocusable} />;
+  }
+
+  return (
     <div className="video-asset" data-uie-name="video-asset" data-uie-value={asset.file_name}>
       {!isFileSharingReceivingEnabled ? (
         <RestrictedVideo />
@@ -153,6 +218,7 @@ const VideoAsset: React.FC<VideoAssetProps> = ({
               poster={videoPreview?.url}
               onError={event => {
                 setVideoPlaybackError(true);
+                amplify.publish(WebAppEvents.ANALYTICS.EVENT, EventName.MESSAGES.VIDEO.PLAY_FAILED);
                 console.error('Video cannot be played', event);
               }}
               onPlaying={onVideoPlaying}
@@ -163,7 +229,12 @@ const VideoAsset: React.FC<VideoAssetProps> = ({
               tabIndex={TabIndex.UNFOCUSABLE}
             />
             {videoPlaybackError ? (
-              <div className="video-asset__playback-error label-xs">{t('conversationPlaybackError')}</div>
+              <div className="video-asset__playback-error">
+                <p className="label-medium">{t('conversationPlaybackError')}</p>
+                <Button variant={ButtonVariant.TERTIARY} onClick={() => downloadAsset(asset)}>
+                  {t('conversationPlaybackErrorDownload')}
+                </Button>
+              </div>
             ) : (
               <>
                 {isPendingUpload ? (
@@ -214,7 +285,7 @@ const VideoAsset: React.FC<VideoAssetProps> = ({
         </>
       )}
     </div>
-  ) : null;
+  );
 };
 
 export {VideoAsset};

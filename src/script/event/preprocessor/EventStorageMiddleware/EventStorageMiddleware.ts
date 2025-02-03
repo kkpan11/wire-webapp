@@ -17,7 +17,13 @@
  *
  */
 
+import {CONVERSATION_EVENT} from '@wireapp/api-client/lib/event';
+import {container} from 'tsyringe';
+
+import {ConversationState} from 'src/script/conversation/ConversationState';
 import {User} from 'src/script/entity/User';
+import {UserFilter} from 'src/script/user/UserFilter';
+import {matchQualifiedIds} from 'Util/QualifiedId';
 
 import {handleLinkPreviewEvent, handleEditEvent, handleAssetEvent, handleReactionEvent} from './eventHandlers';
 import {EventValidationError} from './eventHandlers/EventValidationError';
@@ -28,15 +34,17 @@ import type {EventRecord} from '../../../storage';
 import {CONVERSATION} from '../../Client';
 import {EventMiddleware, IncomingEvent} from '../../EventProcessor';
 import {EventService} from '../../EventService';
+import {EventSource} from '../../EventSource';
 import {eventShouldBeStored} from '../../EventTypeHandling';
 
 export class EventStorageMiddleware implements EventMiddleware {
   constructor(
     private readonly eventService: EventService,
     private readonly selfUser: User,
+    private readonly conversationState: ConversationState = container.resolve(ConversationState),
   ) {}
 
-  async processEvent(event: IncomingEvent) {
+  async processEvent(event: IncomingEvent, source: EventSource) {
     const shouldSaveEvent = eventShouldBeStored(event);
     if (!shouldSaveEvent) {
       return event;
@@ -50,7 +58,7 @@ export class EventStorageMiddleware implements EventMiddleware {
     const duplicateEvent = eventId ? await this.eventService.loadEvent(event.conversation, eventId) : undefined;
 
     // We first validate that the event is valid
-    this.validateEvent(event, duplicateEvent);
+    this.validateEvent(event, source, duplicateEvent);
     // Then ask the different handlers which DB operations to perform
     const operation = await this.getDbOperation(event, duplicateEvent);
     // And finally execute the operation
@@ -72,10 +80,45 @@ export class EventStorageMiddleware implements EventMiddleware {
     return {type: 'insert', event};
   }
 
-  private validateEvent(event: HandledEvents, duplicateEvent?: EventRecord) {
+  private validateEvent(event: HandledEvents, source: EventSource, duplicateEvent?: EventRecord) {
+    if (event.type === CONVERSATION_EVENT.MEMBER_LEAVE && source !== EventSource.NOTIFICATION_STREAM) {
+      /*
+        When we receive a `member-leave` event that is not from the notification stream
+        we should check that the user is actually still part of the
+        conversation before forwarding the event. If the user is already not part
+        of the conversation, then we can throw a validation error
+        (that means the user was already removed by another member-leave event)
+      */
+      if (!event.qualified_conversation) {
+        return;
+      }
+      const conversation = this.conversationState.findConversation(event.qualified_conversation);
+
+      const qualifiedUserIds = event.data.qualified_user_ids;
+
+      if (!conversation || !qualifiedUserIds) {
+        return;
+      }
+
+      const usersNotPartofConversation = qualifiedUserIds.reduce((acc, qualifiedUserId) => {
+        const isDeleted = conversation
+          .allUserEntities()
+          .find(user => matchQualifiedIds(user.qualifiedId, qualifiedUserId))?.isDeleted;
+
+        const isParticipant = UserFilter.isParticipant(conversation, qualifiedUserId);
+
+        return acc || isDeleted || !isParticipant;
+      }, false);
+
+      if (usersNotPartofConversation) {
+        throw new EventValidationError('User is not part of the conversation');
+      }
+    }
+
     if (!duplicateEvent) {
       return;
     }
+
     if (duplicateEvent.from !== event.from) {
       throw new EventValidationError('ID previously used by another user');
     }

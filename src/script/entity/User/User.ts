@@ -92,7 +92,6 @@ export class User {
   public readonly managedBy: ko.Observable<string>;
   public readonly mediumPictureResource: ko.Observable<AssetRemoteData>;
   public readonly name: ko.Observable<string>;
-  public readonly phone: ko.Observable<string>;
   public readonly previewPictureResource: ko.Observable<AssetRemoteData>;
   public readonly providerName: ko.Observable<string | undefined> = ko.observable();
   public readonly teamRole: ko.Observable<TEAM_ROLE>;
@@ -148,7 +147,6 @@ export class User {
     this.accent_color = ko.pureComputed(() => User.ACCENT_COLOR[this.accent_id()] || User.ACCENT_COLOR[ACCENT_ID.BLUE]);
 
     this.email = ko.observable();
-    this.phone = ko.observable();
 
     this.name = ko.observable('');
 
@@ -270,7 +268,7 @@ export class User {
   }
 
   hasActivatedIdentity(): boolean {
-    return !!this.email() || !!this.phone() || this.isSingleSignOn;
+    return !!this.email() || this.isSingleSignOn;
   }
 
   removeClient(client_id: string): ClientEntity[] {
@@ -335,13 +333,13 @@ export class User {
     if (remainingMinutes <= 45) {
       const remainingQuarters = Math.max(1, Math.ceil(remainingMinutes / 15));
       const timeValue = remainingQuarters * 15;
-      this.expirationText(t('userRemainingTimeMinutes', timeValue));
+      this.expirationText(t('userRemainingTimeMinutes', {time: timeValue}));
       this.expirationRemaining(timeValue * TIME_IN_MILLIS.MINUTE);
       this.expirationRemainingText(`${timeValue}m`);
     } else {
       const showOneAndAHalf = remainingMinutes > 60 && remainingMinutes <= 90;
       const timeValue = showOneAndAHalf ? 1.5 : Math.ceil(remainingMinutes / 60);
-      this.expirationText(t('userRemainingTimeHours', timeValue));
+      this.expirationText(t('userRemainingTimeHours', {time: timeValue}));
       this.expirationRemaining(timeValue * TIME_IN_MILLIS.HOUR);
       this.expirationRemainingText(`${timeValue}h`);
     }

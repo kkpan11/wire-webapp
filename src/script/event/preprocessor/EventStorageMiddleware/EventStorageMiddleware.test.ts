@@ -20,15 +20,23 @@
 import {Asset as ProtobufAsset} from '@wireapp/protocol-messaging';
 
 import {AssetTransferState} from 'src/script/assets/AssetTransferState';
+import {ConversationState} from 'src/script/conversation/ConversationState';
+import {Conversation} from 'src/script/entity/Conversation';
 import {User} from 'src/script/entity/User';
 import {EventError} from 'src/script/error/EventError';
-import {createAssetAddEvent, createMessageAddEvent, toSavedEvent} from 'test/helper/EventGenerator';
+import {
+  createAssetAddEvent,
+  createMemberLeaveEvent,
+  createMessageAddEvent,
+  toSavedEvent,
+} from 'test/helper/EventGenerator';
 import {createUuid} from 'Util/uuid';
 
 import {EventStorageMiddleware} from './EventStorageMiddleware';
 
 import {ClientEvent} from '../../Client';
 import {EventService} from '../../EventService';
+import {EventSource} from '../../EventSource';
 
 function buildEventStorageMiddleware() {
   const eventService = {
@@ -37,9 +45,15 @@ function buildEventStorageMiddleware() {
     replaceEvent: jest.fn(event => event),
     deleteEvent: jest.fn(),
   } as unknown as jest.Mocked<EventService>;
-
+  const conversationState = {
+    findConversation: jest.fn(),
+  } as unknown as jest.Mocked<ConversationState>;
   const selfUser = new User(createUuid());
-  return [new EventStorageMiddleware(eventService, selfUser), {eventService, selfUser}] as const;
+
+  return [
+    new EventStorageMiddleware(eventService, selfUser, conversationState),
+    {eventService, conversationState, selfUser},
+  ] as const;
 }
 
 describe('EventStorageMiddleware', () => {
@@ -48,7 +62,7 @@ describe('EventStorageMiddleware', () => {
       const event = {type: 'other'} as any;
       const [eventStorageMiddleware, {eventService}] = buildEventStorageMiddleware();
 
-      await eventStorageMiddleware.processEvent(event);
+      await eventStorageMiddleware.processEvent(event, EventSource.WEBSOCKET);
       expect(eventService.saveEvent).not.toHaveBeenCalledWith(event);
     });
 
@@ -56,7 +70,7 @@ describe('EventStorageMiddleware', () => {
       const event = createMessageAddEvent();
       const [eventStorageMiddleware, {eventService}] = buildEventStorageMiddleware();
 
-      await eventStorageMiddleware.processEvent(event);
+      await eventStorageMiddleware.processEvent(event, EventSource.WEBSOCKET);
       expect(eventService.saveEvent).toHaveBeenCalledWith(event);
     });
 
@@ -66,7 +80,7 @@ describe('EventStorageMiddleware', () => {
       const eventWithSameId = {...event, from: createUuid()};
       eventService.loadEvent.mockResolvedValue({primary_key: '', category: 1, ...eventWithSameId});
 
-      await expect(eventStorageMiddleware.processEvent(event)).rejects.toEqual(
+      await expect(eventStorageMiddleware.processEvent(event, EventSource.WEBSOCKET)).rejects.toEqual(
         new EventError(
           EventError.TYPE.VALIDATION_FAILED,
           'Event validation failed: ID previously used by another user',
@@ -74,12 +88,72 @@ describe('EventStorageMiddleware', () => {
       );
     });
 
+    it('fails for a member leave event when users are not part of the conversation', async () => {
+      const [eventStorageMiddleware, {conversationState}] = buildEventStorageMiddleware();
+      const conversationId = createUuid();
+      const userIds = [createUuid(), createUuid(), createUuid(), createUuid()];
+      const conversation = new Conversation(conversationId, '');
+
+      conversationState.findConversation.mockImplementation(() => conversation);
+
+      const event = createMemberLeaveEvent(conversationId, userIds);
+
+      await expect(eventStorageMiddleware.processEvent(event, EventSource.WEBSOCKET)).rejects.toEqual(
+        new EventError(
+          EventError.TYPE.VALIDATION_FAILED,
+          'Event validation failed: User is not part of the conversation',
+        ),
+      );
+    });
+
+    it('fails for a member leave event when users are part of the conversation but are deleted already', async () => {
+      const [eventStorageMiddleware, {conversationState}] = buildEventStorageMiddleware();
+      const conversationId = createUuid();
+      const userIds = [createUuid(), createUuid(), createUuid()];
+      const user1 = new User(userIds[0]);
+      const user2 = new User(userIds[1]);
+      const user3 = new User(userIds[2]);
+      user1.isDeleted = true;
+      user2.isDeleted = true;
+      user3.isDeleted = true;
+      const conversation = new Conversation(conversationId, '');
+      conversation.participating_user_ets([user1, user2, user3]);
+
+      conversationState.findConversation.mockImplementation(() => conversation);
+
+      const event = createMemberLeaveEvent(conversationId, userIds);
+
+      await expect(eventStorageMiddleware.processEvent(event, EventSource.WEBSOCKET)).rejects.toEqual(
+        new EventError(
+          EventError.TYPE.VALIDATION_FAILED,
+          'Event validation failed: User is not part of the conversation',
+        ),
+      );
+    });
+
+    it('does not return an error for a member leave event when users are part of the conversation', async () => {
+      const [eventStorageMiddleware, {conversationState}] = buildEventStorageMiddleware();
+      const conversationId = createUuid();
+      const userIds = [createUuid(), createUuid(), createUuid()];
+      const user1 = new User(userIds[0]);
+      const user2 = new User(userIds[1]);
+      const user3 = new User(userIds[2]);
+      const conversation = new Conversation(conversationId, '');
+      conversation.participating_user_ets([user1, user2, user3]);
+
+      conversationState.findConversation.mockImplementation(() => conversation);
+
+      const event = createMemberLeaveEvent(conversationId, userIds);
+
+      await expect(eventStorageMiddleware.processEvent(event, EventSource.WEBSOCKET)).resolves.toEqual(event);
+    });
+
     it('fails for a non-"text message" with an ID previously used by the same user', async () => {
       const [eventStorageMiddleware, {eventService}] = buildEventStorageMiddleware();
       const event = createMessageAddEvent();
       eventService.loadEvent.mockResolvedValue(toSavedEvent({...event, type: ClientEvent.CALL.E_CALL} as any));
 
-      await expect(eventStorageMiddleware.processEvent(event)).rejects.toEqual(
+      await expect(eventStorageMiddleware.processEvent(event, EventSource.WEBSOCKET)).rejects.toEqual(
         new EventError(
           EventError.TYPE.VALIDATION_FAILED,
           'Event validation failed: ID already used for a different type of message',
@@ -92,7 +166,7 @@ describe('EventStorageMiddleware', () => {
       const event = createMessageAddEvent();
       eventService.loadEvent.mockResolvedValue(toSavedEvent(event));
 
-      await expect(eventStorageMiddleware.processEvent(event)).rejects.toEqual(
+      await expect(eventStorageMiddleware.processEvent(event, EventSource.WEBSOCKET)).rejects.toEqual(
         new EventError(
           EventError.TYPE.VALIDATION_FAILED,
           'Event validation failed: ID already used for a successfully sent message',
@@ -106,7 +180,7 @@ describe('EventStorageMiddleware', () => {
       const storedEvent = {...event, data: {...event.data, previews: ['1']}};
       eventService.loadEvent.mockResolvedValue(toSavedEvent(storedEvent));
 
-      await expect(eventStorageMiddleware.processEvent(event)).rejects.toEqual(
+      await expect(eventStorageMiddleware.processEvent(event, EventSource.WEBSOCKET)).rejects.toEqual(
         new EventError(
           EventError.TYPE.VALIDATION_FAILED,
           'Event validation failed: ID already used for a successfully sent message',
@@ -122,7 +196,7 @@ describe('EventStorageMiddleware', () => {
 
       const newEvent = {...event, data: {...event.data, content: 'different content', previews: ['1']}};
 
-      await expect(eventStorageMiddleware.processEvent(newEvent)).rejects.toEqual(
+      await expect(eventStorageMiddleware.processEvent(newEvent, EventSource.WEBSOCKET)).rejects.toEqual(
         new EventError(
           EventError.TYPE.VALIDATION_FAILED,
           'Event validation failed: Link preview with different text content',
@@ -142,7 +216,7 @@ describe('EventStorageMiddleware', () => {
       event.data.previews?.push('1');
       event.time = changed_time;
 
-      const savedEvent = (await eventStorageMiddleware.processEvent(event)) as any;
+      const savedEvent = (await eventStorageMiddleware.processEvent(event, EventSource.WEBSOCKET)) as any;
       expect(savedEvent.time).toEqual(initial_time);
       expect(savedEvent.time).not.toEqual(changed_time);
       expect(eventService.replaceEvent).toHaveBeenCalled();
@@ -152,7 +226,7 @@ describe('EventStorageMiddleware', () => {
       const [eventStorageMiddleware, {eventService}] = buildEventStorageMiddleware();
       const event = createMessageAddEvent({dataOverrides: {previews: ['1']}});
 
-      await eventStorageMiddleware.processEvent(event);
+      await eventStorageMiddleware.processEvent(event, EventSource.WEBSOCKET);
       expect(eventService.replaceEvent).not.toHaveBeenCalled();
       expect(eventService.saveEvent).toHaveBeenCalled();
     });
@@ -164,7 +238,7 @@ describe('EventStorageMiddleware', () => {
 
       linkPreviewEvent.data.replacing_message_id = 'missing';
 
-      await expect(eventStorageMiddleware.processEvent(linkPreviewEvent)).rejects.toEqual(
+      await expect(eventStorageMiddleware.processEvent(linkPreviewEvent, EventSource.WEBSOCKET)).rejects.toEqual(
         new EventError(EventError.TYPE.VALIDATION_FAILED, 'Event validation failed: Edit event without original event'),
       );
     });
@@ -185,7 +259,7 @@ describe('EventStorageMiddleware', () => {
       linkPreviewEvent.data.replacing_message_id = replacingId;
       linkPreviewEvent.data.previews = ['preview'];
 
-      const updatedEvent = (await eventStorageMiddleware.processEvent(linkPreviewEvent)) as any;
+      const updatedEvent = (await eventStorageMiddleware.processEvent(linkPreviewEvent, EventSource.WEBSOCKET)) as any;
       expect(updatedEvent.edited_time).not.toBeUndefined();
       expect(eventService.replaceEvent).toHaveBeenCalled();
       expect(eventService.saveEvent).not.toHaveBeenCalled();
@@ -207,7 +281,7 @@ describe('EventStorageMiddleware', () => {
       event.data.replacing_message_id = originalEvent.id;
       event.time = changed_time;
 
-      const updatedEvent = (await eventStorageMiddleware.processEvent(event)) as any;
+      const updatedEvent = (await eventStorageMiddleware.processEvent(event, EventSource.WEBSOCKET)) as any;
       expect(updatedEvent.time).toEqual(initial_time);
       expect(updatedEvent.time).not.toEqual(changed_time);
       expect(updatedEvent.edited_time).toEqual(changed_time);
@@ -231,7 +305,7 @@ describe('EventStorageMiddleware', () => {
 
       editEvent.data.replacing_message_id = replacingId;
 
-      const updatedEvent = (await eventStorageMiddleware.processEvent(editEvent)) as any;
+      const updatedEvent = (await eventStorageMiddleware.processEvent(editEvent, EventSource.WEBSOCKET)) as any;
       expect(eventService.replaceEvent).toHaveBeenCalled();
       expect(eventService.saveEvent).not.toHaveBeenCalled();
       expect(updatedEvent.data.previews.length).toEqual(0);
@@ -241,7 +315,7 @@ describe('EventStorageMiddleware', () => {
       const [eventStorageMiddleware, {eventService}] = buildEventStorageMiddleware();
       const event = createAssetAddEvent();
 
-      const updatedEvent = await eventStorageMiddleware.processEvent(event);
+      const updatedEvent = await eventStorageMiddleware.processEvent(event, EventSource.WEBSOCKET);
       expect(updatedEvent.type).toEqual(ClientEvent.CONVERSATION.ASSET_ADD);
       expect(eventService.saveEvent).toHaveBeenCalled();
     });
@@ -270,7 +344,7 @@ describe('EventStorageMiddleware', () => {
         eventService.loadEvent.mockResolvedValue(toSavedEvent(assetAddEvent));
         eventService.deleteEvent.mockResolvedValue(1);
 
-        const savedEvent = await eventStorageMiddleware.processEvent(assetCancelEvent);
+        const savedEvent = await eventStorageMiddleware.processEvent(assetCancelEvent, EventSource.WEBSOCKET);
         expect(savedEvent.type).toEqual(ClientEvent.CONVERSATION.ASSET_ADD);
         expect(eventService.deleteEvent).toHaveBeenCalled();
       }
@@ -292,7 +366,7 @@ describe('EventStorageMiddleware', () => {
       eventService.loadEvent.mockResolvedValue(toSavedEvent(assetAddEvent));
       eventService.deleteEvent.mockResolvedValue(1);
 
-      const savedEvent = await eventStorageMiddleware.processEvent(assetUploadFailedEvent);
+      const savedEvent = await eventStorageMiddleware.processEvent(assetUploadFailedEvent, EventSource.WEBSOCKET);
       expect(savedEvent.type).toEqual(ClientEvent.CONVERSATION.ASSET_ADD);
       expect(eventService.deleteEvent).toHaveBeenCalled();
     });
@@ -313,7 +387,7 @@ describe('EventStorageMiddleware', () => {
 
       eventService.loadEvent.mockResolvedValue(toSavedEvent(assetAddEvent));
 
-      const savedEvent = await eventStorageMiddleware.processEvent(assetUploadFailedEvent);
+      const savedEvent = await eventStorageMiddleware.processEvent(assetUploadFailedEvent, EventSource.WEBSOCKET);
       expect(savedEvent.type).toEqual(ClientEvent.CONVERSATION.ASSET_ADD);
       expect(eventService.replaceEvent).toHaveBeenCalled();
     });
@@ -330,7 +404,7 @@ describe('EventStorageMiddleware', () => {
 
       eventService.loadEvent.mockResolvedValue(toSavedEvent(initialAssetEvent));
 
-      const updatedEvent = (await eventStorageMiddleware.processEvent(updateStatusEvent)) as any;
+      const updatedEvent = (await eventStorageMiddleware.processEvent(updateStatusEvent, EventSource.WEBSOCKET)) as any;
       expect(updatedEvent.type).toEqual(ClientEvent.CONVERSATION.ASSET_ADD);
       expect(updatedEvent.data.status).toEqual(updateStatusEvent.data.status);
       expect(eventService.replaceEvent).toHaveBeenCalled();
@@ -348,7 +422,7 @@ describe('EventStorageMiddleware', () => {
 
       eventService.loadEvent.mockResolvedValue(toSavedEvent(initialAssetEvent));
 
-      const updatedEvent = await eventStorageMiddleware.processEvent(AssetPreviewEvent);
+      const updatedEvent = await eventStorageMiddleware.processEvent(AssetPreviewEvent, EventSource.WEBSOCKET);
       expect(updatedEvent.type).toEqual(ClientEvent.CONVERSATION.ASSET_ADD);
       expect(eventService.replaceEvent).toHaveBeenCalled();
     });

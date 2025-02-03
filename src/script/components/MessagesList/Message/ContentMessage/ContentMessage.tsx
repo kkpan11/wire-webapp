@@ -17,21 +17,26 @@
  *
  */
 
-import React, {useMemo, useState, useEffect} from 'react';
+import {useMemo, useState, useEffect, useRef} from 'react';
 
 import {QualifiedId} from '@wireapp/api-client/lib/user';
+import cx from 'classnames';
+import ko from 'knockout';
 
+import {OutlineCheck} from '@wireapp/react-ui-kit';
+
+import {ReadIndicator} from 'Components/MessagesList/Message/ReadIndicator';
 import {Conversation} from 'src/script/entity/Conversation';
 import {CompositeMessage} from 'src/script/entity/message/CompositeMessage';
 import {ContentMessage} from 'src/script/entity/message/ContentMessage';
-import {Message} from 'src/script/entity/message/Message';
 import {useRelativeTimestamp} from 'src/script/hooks/useRelativeTimestamp';
 import {StatusType} from 'src/script/message/StatusType';
 import {useKoSubscribableChildren} from 'Util/ComponentUtil';
 import {getMessageAriaLabel} from 'Util/conversationMessages';
-import {TIME_IN_MILLIS} from 'Util/TimeUtil';
+import {t} from 'Util/LocalizerUtil';
 
 import {ContentAsset} from './asset';
+import {deliveredMessageIndicator, messageBodyWrapper, messageEphemeralTimer} from './ContentMessage.styles';
 import {MessageActionsMenu} from './MessageActions/MessageActions';
 import {useMessageActionsState} from './MessageActions/MessageActions.state';
 import {MessageReactionsList} from './MessageActions/MessageReactions/MessageReactionsList';
@@ -40,6 +45,8 @@ import {Quote} from './MessageQuote';
 import {CompleteFailureToSendWarning, PartialFailureToSendWarning} from './Warnings';
 
 import {MessageActions} from '..';
+import type {FileAsset as FileAssetType} from '../../../../entity/message/FileAsset';
+import {useClickOutside} from '../../../../hooks/useClickOutside';
 import {EphemeralStatusType} from '../../../../message/EphemeralStatusType';
 import {ContextMenuEntry} from '../../../../ui/ContextMenu';
 import {EphemeralTimer} from '../EphemeralTimer';
@@ -51,29 +58,30 @@ export interface ContentMessageProps extends Omit<MessageActions, 'onClickResetS
   conversation: Conversation;
   findMessage: (conversation: Conversation, messageId: string) => Promise<ContentMessage | undefined>;
   focusMessage?: () => void;
+  /** whether the message should display the user avatar and user name before the actual content */
+  hideHeader: boolean;
   hasMarker?: boolean;
-  isMessageFocused: boolean;
+  isFocused: boolean;
   isLastDeliveredMessage: boolean;
   message: ContentMessage;
   onClickButton: (message: CompositeMessage, buttonId: string) => void;
   onRetry: (message: ContentMessage) => void;
-  previousMessage?: Message;
   quotedMessage?: ContentMessage;
   selfId: QualifiedId;
   isMsgElementsFocusable: boolean;
   onClickReaction: (emoji: string) => void;
+  is1to1?: boolean;
 }
 
-export const ContentMessageComponent: React.FC<ContentMessageProps> = ({
+export const ContentMessageComponent = ({
   conversation,
   message,
   findMessage,
   selfId,
-  hasMarker = false,
-  isMessageFocused,
+  hideHeader,
+  isFocused,
   isLastDeliveredMessage,
   contextMenu,
-  previousMessage,
   onClickAvatar,
   onClickImage,
   onClickTimestamp,
@@ -84,60 +92,38 @@ export const ContentMessageComponent: React.FC<ContentMessageProps> = ({
   isMsgElementsFocusable,
   onClickReaction,
   onClickDetails,
-}) => {
+  is1to1,
+}: ContentMessageProps) => {
+  const messageRef = useRef<HTMLDivElement | null>(null);
+
   // check if current message is focused and its elements focusable
-  const msgFocusState = useMemo(
-    () => isMsgElementsFocusable && isMessageFocused,
-    [isMsgElementsFocusable, isMessageFocused],
-  );
+  const msgFocusState = useMemo(() => isMsgElementsFocusable && isFocused, [isMsgElementsFocusable, isFocused]);
   const messageFocusedTabIndex = useMessageFocusedTabIndex(msgFocusState);
   const {
     senderName,
     timestamp,
-    ephemeral_caption,
+    ephemeralCaption,
     ephemeral_status,
     assets,
     was_edited,
     failedToSend,
     reactions,
     status,
-    user,
     quote,
+    isObfuscated,
   } = useKoSubscribableChildren(message, [
     'senderName',
     'timestamp',
-    'ephemeral_caption',
+    'ephemeralCaption',
     'ephemeral_status',
     'assets',
     'was_edited',
     'failedToSend',
     'reactions',
     'status',
-    'user',
     'quote',
+    'isObfuscated',
   ]);
-
-  const shouldShowMessageHeader = (): boolean => {
-    if (!previousMessage || hasMarker) {
-      return true;
-    }
-
-    if (message.isContent() && was_edited) {
-      return true;
-    }
-
-    // Interval in seconds, within which messages are grouped together
-    const GROUPED_MESSAGE_INTERVAL = 30 * TIME_IN_MILLIS.SECOND;
-
-    const currentMessageDate = message.timestamp();
-    const previousMessageDate = previousMessage.timestamp();
-
-    if (currentMessageDate - previousMessageDate >= GROUPED_MESSAGE_INTERVAL) {
-      return true;
-    }
-
-    return !previousMessage.isContent() || previousMessage.user().id !== user.id;
-  };
 
   const timeAgo = useRelativeTimestamp(message.timestamp());
 
@@ -150,23 +136,45 @@ export const ContentMessageComponent: React.FC<ContentMessageProps> = ({
   const [isActionMenuVisible, setActionMenuVisibility] = useState(false);
   const isMenuOpen = useMessageActionsState(state => state.isMenuOpen);
   useEffect(() => {
-    setActionMenuVisibility(isMessageFocused || msgFocusState);
-  }, [msgFocusState, isMessageFocused]);
+    setActionMenuVisibility(isFocused || msgFocusState);
+  }, [msgFocusState, isFocused]);
 
   const isConversationReadonly = conversation.readOnlyState() !== null;
+
+  const contentMessageWrapperRef = (element: HTMLDivElement | null) => {
+    messageRef.current = element;
+
+    setTimeout(() => {
+      if (element?.parentElement?.querySelector(':hover') === element) {
+        // Trigger the action menu in case the component is rendered with the mouse already hovering over it
+        setActionMenuVisibility(true);
+      }
+    });
+  };
+
+  const asset = assets?.[0] as FileAssetType | undefined;
+  const isFileMessage = !!asset?.isFile();
+  const isAudioMessage = !!asset?.isAudio();
+  const isVideoMessage = !!asset?.isVideo();
+  const isImageMessage = !!asset?.isImage();
+
+  const isAssetMessage = isFileMessage || isAudioMessage || isVideoMessage || isImageMessage;
+  const isEphemeralMessage = ephemeral_status === EphemeralStatusType.ACTIVE;
+
+  const hideActionMenuVisibility = () => {
+    if (isFocused) {
+      setActionMenuVisibility(false);
+    }
+  };
+
+  // Closing another ActionMenu on outside click
+  useClickOutside(messageRef, hideActionMenuVisibility);
 
   return (
     <div
       aria-label={messageAriaLabel}
       className="content-message-wrapper"
-      ref={element => {
-        setTimeout(() => {
-          if (element?.parentElement?.querySelector(':hover') === element) {
-            // Trigger the action menu in case the component is rendered with the mouse already hovering over it
-            setActionMenuVisibility(true);
-          }
-        });
-      }}
+      ref={contentMessageWrapperRef}
       onMouseEnter={() => {
         // open another floating action menu if none already open
         if (!isMenuOpen) {
@@ -180,7 +188,7 @@ export const ContentMessageComponent: React.FC<ContentMessageProps> = ({
         }
       }}
     >
-      {shouldShowMessageHeader() && (
+      {(was_edited || !hideHeader) && (
         <MessageHeader onClickAvatar={onClickAvatar} message={message} focusTabIndex={messageFocusedTabIndex}>
           {was_edited && (
             <span className="message-header-label-icon icon-edit" title={message.displayEditedTimestamp()}></span>
@@ -194,14 +202,26 @@ export const ContentMessageComponent: React.FC<ContentMessageProps> = ({
         </MessageHeader>
       )}
 
-      <div className="message-body">
-        <div className="message-body-content" title={ephemeral_caption}>
-          {ephemeral_status === EphemeralStatusType.ACTIVE && (
-            <div className="message-ephemeral-timer">
-              <EphemeralTimer message={message} />
-            </div>
-          )}
+      <div css={messageBodyWrapper(isEphemeralMessage)}>
+        {isEphemeralMessage && (
+          <div
+            css={messageEphemeralTimer}
+            {...(ephemeralCaption && {title: ephemeralCaption})}
+            className="message-ephemeral-timer"
+          >
+            <EphemeralTimer message={message} />
+          </div>
+        )}
 
+        <div
+          className={cx('message-body', {
+            'message-asset': isAssetMessage,
+            'message-quoted': !!quote,
+            'ephemeral-asset-expired': isObfuscated && isAssetMessage,
+            'icon-file': isObfuscated && isFileMessage,
+            'icon-movie': isObfuscated && isVideoMessage,
+          })}
+        >
           {quote && (
             <Quote
               conversation={conversation}
@@ -227,52 +247,71 @@ export const ContentMessageComponent: React.FC<ContentMessageProps> = ({
               onClickMessage={onClickMessage}
               isMessageFocused={msgFocusState}
               is1to1Conversation={conversation.is1to1()}
-              isLastDeliveredMessage={isLastDeliveredMessage}
               onClickDetails={() => onClickDetails(message)}
             />
           ))}
 
-          {failedToSend && (
-            <PartialFailureToSendWarning
-              isMessageFocused={msgFocusState}
-              failedToSend={failedToSend}
-              knownUsers={conversation.allUserEntities()}
-            />
+          {isAssetMessage && (
+            <ReadIndicator message={message} is1to1Conversation={conversation.is1to1()} onClick={onClickDetails} />
           )}
 
-          {[StatusType.FAILED, StatusType.FEDERATION_ERROR].includes(status) && (
-            <CompleteFailureToSendWarning
-              {...(status === StatusType.FEDERATION_ERROR && {unreachableDomain: conversation.domain})}
+          {!isConversationReadonly && isActionMenuVisible && (
+            <MessageActionsMenu
+              isMsgWithHeader={!hideHeader}
+              message={message}
+              handleActionMenuVisibility={setActionMenuVisibility}
+              contextMenu={contextMenu}
               isMessageFocused={msgFocusState}
-              onRetry={() => onRetry(message)}
+              handleReactionClick={onClickReaction}
+              reactionsTotalCount={reactions.length}
+              isRemovedFromConversation={conversation.isSelfUserRemoved()}
             />
           )}
         </div>
 
-        {!isConversationReadonly && isActionMenuVisible && (
-          <MessageActionsMenu
-            isMsgWithHeader={shouldShowMessageHeader()}
-            message={message}
-            handleActionMenuVisibility={setActionMenuVisibility}
-            contextMenu={contextMenu}
-            isMessageFocused={msgFocusState}
-            handleReactionClick={onClickReaction}
-            reactionsTotalCount={reactions.length}
-            isRemovedFromConversation={conversation.removed_from_conversation()}
-          />
+        {message.expectsReadConfirmation && (
+          <div css={deliveredMessageIndicator}>
+            {is1to1 && isLastDeliveredMessage && (
+              <div
+                data-uie-name="status-message-read-receipt-delivered"
+                title={t('conversationMessageDelivered')}
+                className="delivered-message-icon"
+              >
+                <OutlineCheck />
+              </div>
+            )}
+          </div>
         )}
       </div>
 
-      <MessageReactionsList
-        reactions={reactions}
-        selfUserId={selfId}
-        handleReactionClick={onClickReaction}
-        isMessageFocused={msgFocusState}
-        onTooltipReactionCountClick={() => onClickReactionDetails(message)}
-        onLastReactionKeyEvent={() => setActionMenuVisibility(false)}
-        isRemovedFromConversation={conversation.removed_from_conversation()}
-        users={conversation.allUserEntities()}
-      />
+      {[StatusType.FAILED, StatusType.FEDERATION_ERROR].includes(status) && (
+        <CompleteFailureToSendWarning
+          {...(status === StatusType.FEDERATION_ERROR && {unreachableDomain: conversation.domain})}
+          isMessageFocused={msgFocusState}
+          onRetry={() => onRetry(message)}
+        />
+      )}
+
+      {failedToSend && (
+        <PartialFailureToSendWarning
+          isMessageFocused={msgFocusState}
+          failedToSend={failedToSend}
+          knownUsers={conversation.allUserEntities()}
+        />
+      )}
+
+      {!!reactions.length && (
+        <MessageReactionsList
+          reactions={reactions}
+          selfUserId={selfId}
+          handleReactionClick={onClickReaction}
+          isMessageFocused={msgFocusState}
+          onTooltipReactionCountClick={() => onClickReactionDetails(message)}
+          onLastReactionKeyEvent={() => setActionMenuVisibility(false)}
+          isRemovedFromConversation={conversation.isSelfUserRemoved()}
+          users={conversation.allUserEntities()}
+        />
+      )}
     </div>
   );
 };

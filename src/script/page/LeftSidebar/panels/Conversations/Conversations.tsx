@@ -17,43 +17,52 @@
  *
  */
 
-import React, {useEffect, useState} from 'react';
+import React, {KeyboardEvent as ReactKeyBoardEvent, useCallback, useEffect, useMemo, useRef, useState} from 'react';
 
-import {TabIndex} from '@wireapp/react-ui-kit/lib/types/enums';
 import {amplify} from 'amplify';
-import cx from 'classnames';
 import {container} from 'tsyringe';
+import {useShallow} from 'zustand/react/shallow';
 
+import {useMatchMedia} from '@wireapp/react-ui-kit';
 import {WebAppEvents} from '@wireapp/webapp-events';
 
-import {CallingCell} from 'Components/calling/CallingCell';
-import {Icon} from 'Components/Icon';
-import {LegalHoldDot} from 'Components/LegalHoldDot';
-import {UserInfo} from 'Components/UserInfo';
-import {UserVerificationBadges} from 'Components/VerificationBadge';
-import {ListState} from 'src/script/page/useAppState';
+import {useConversationFocus} from 'Hooks/useConversationFocus';
+import {IntegrationRepository} from 'src/script/integration/IntegrationRepository';
+import {Preferences} from 'src/script/page/LeftSidebar/panels/Preferences';
+import {StartUI} from 'src/script/page/LeftSidebar/panels/StartUI';
+import {ANIMATED_PAGE_TRANSITION_DURATION} from 'src/script/page/MainContent';
+import {useAppMainState, ViewType} from 'src/script/page/state';
+import {ContentState, ListState} from 'src/script/page/useAppState';
+import {SearchRepository} from 'src/script/search/SearchRepository';
+import {TeamRepository} from 'src/script/team/TeamRepository';
+import {EventName} from 'src/script/tracking/EventName';
+import {UserRepository} from 'src/script/user/UserRepository';
 import {useKoSubscribableChildren} from 'Util/ComponentUtil';
-import {t} from 'Util/LocalizerUtil';
 
+import {ConversationCallingView} from './ConversationCallingView/ConversationCallingView';
+import {ConversationHeader} from './ConversationHeader';
+import {conversationsSpacerStyles} from './Conversations.styles';
+import {ConversationSidebar} from './ConversationSidebar/ConversationSidebar';
 import {ConversationsList} from './ConversationsList';
-import {useFolderState} from './state';
+import {EmptyConversationList} from './EmptyConversationList';
+import {getGroupParticipantsConversations} from './getGroupParticipantsConversation';
+import {getTabConversations, scrollToConversation} from './helpers';
+import {useFolderStore} from './useFoldersStore';
+import {SidebarStatus, SidebarTabs, useSidebarStore} from './useSidebarStore';
 
 import {CallState} from '../../../../calling/CallState';
-import {DefaultLabelIds} from '../../../../conversation/ConversationLabelRepository';
+import {createLabel} from '../../../../conversation/ConversationLabelRepository';
 import {ConversationRepository} from '../../../../conversation/ConversationRepository';
 import {ConversationState} from '../../../../conversation/ConversationState';
+import type {Conversation} from '../../../../entity/Conversation';
 import {User} from '../../../../entity/User';
-import {useConversationFocus} from '../../../../hooks/useConversationFocus';
 import {PreferenceNotificationRepository} from '../../../../notification/PreferenceNotificationRepository';
 import {PropertiesRepository} from '../../../../properties/PropertiesRepository';
-import {PROPERTIES_TYPE} from '../../../../properties/PropertiesType';
+import {generateConversationUrl} from '../../../../router/routeGenerator';
+import {createNavigateKeyboard} from '../../../../router/routerBindings';
 import {TeamState} from '../../../../team/TeamState';
-import {AvailabilityContextMenu} from '../../../../ui/AvailabilityContextMenu';
-import {Shortcut} from '../../../../ui/Shortcut';
-import {ShortcutType} from '../../../../ui/ShortcutType';
 import {UserState} from '../../../../user/UserState';
 import {ListViewModel} from '../../../../view_model/ListViewModel';
-import {useAppMainState, ViewType} from '../../../state';
 import {ListWrapper} from '../ListWrapper';
 
 type ConversationsProps = {
@@ -64,17 +73,19 @@ type ConversationsProps = {
   preferenceNotificationRepository: PreferenceNotificationRepository;
   propertiesRepository: PropertiesRepository;
   selfUser: User;
-  switchList: (list: ListState) => void;
   teamState?: TeamState;
   userState?: UserState;
+  integrationRepository: IntegrationRepository;
+  searchRepository: SearchRepository;
+  teamRepository: TeamRepository;
+  userRepository: UserRepository;
 };
 
-export enum ConversationViewStyle {
-  RECENT,
-  FOLDER,
-}
-
-const Conversations: React.FC<ConversationsProps> = ({
+export const Conversations: React.FC<ConversationsProps> = ({
+  integrationRepository,
+  searchRepository,
+  teamRepository,
+  userRepository,
   propertiesRepository,
   conversationRepository,
   preferenceNotificationRepository,
@@ -84,48 +95,142 @@ const Conversations: React.FC<ConversationsProps> = ({
   callState = container.resolve(CallState),
   userState = container.resolve(UserState),
   selfUser,
-  switchList,
 }) => {
+  const [conversationListRef, setConversationListRef] = useState<HTMLElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+
   const {
-    name: userName,
-    isOnLegalHold,
-    hasPendingLegalHold,
-  } = useKoSubscribableChildren(selfUser, ['hasPendingLegalHold', 'isOnLegalHold', 'name']);
-  const {classifiedDomains} = useKoSubscribableChildren(teamState, ['classifiedDomains']);
+    currentTab,
+    status: sidebarStatus,
+    setStatus: setSidebarStatus,
+    setCurrentTab,
+  } = useSidebarStore(useShallow(state => state));
+  const [conversationsFilter, setConversationsFilter] = useState<string>('');
+  const {classifiedDomains, isTeam} = useKoSubscribableChildren(teamState, ['classifiedDomains', 'isTeam']);
   const {connectRequests} = useKoSubscribableChildren(userState, ['connectRequests']);
-  const {activeConversation} = useKoSubscribableChildren(conversationState, ['activeConversation']);
-  const {archivedConversations, visibleConversations: conversations} = useKoSubscribableChildren(conversationState, [
+  const {notifications} = useKoSubscribableChildren(preferenceNotificationRepository, ['notifications']);
+
+  const {isTemporaryGuest} = useKoSubscribableChildren(selfUser, ['isTemporaryGuest']);
+
+  const {
+    activeConversation,
+    unreadConversations,
+    archivedConversations,
+    groupConversations,
+    directConversations,
+    visibleConversations,
+  } = useKoSubscribableChildren(conversationState, [
+    'activeConversation',
     'archivedConversations',
+    'groupConversations',
+    'directConversations',
+    'unreadConversations',
     'visibleConversations',
   ]);
-  const {notifications} = useKoSubscribableChildren(preferenceNotificationRepository, ['notifications']);
+
+  const conversations = useMemo(() => visibleConversations, [visibleConversations]);
+
   const {activeCalls} = useKoSubscribableChildren(callState, ['activeCalls']);
 
-  const initialViewStyle = propertiesRepository.getPreference(PROPERTIES_TYPE.INTERFACE.VIEW_FOLDERS)
-    ? ConversationViewStyle.FOLDER
-    : ConversationViewStyle.RECENT;
+  const {conversationLabelRepository} = conversationRepository;
+  const {labels} = useKoSubscribableChildren(conversationLabelRepository, ['labels']);
+  const favoriteLabel = conversationLabelRepository.getFavoriteLabel();
 
-  const [viewStyle, setViewStyle] = useState<ConversationViewStyle>(initialViewStyle);
-  const showBadge = notifications.length > 0;
+  const favoriteConversations = useMemo(
+    () => conversationLabelRepository.getLabelConversations(favoriteLabel, conversations),
+    [conversationLabelRepository, conversations, favoriteLabel],
+  );
 
-  const isRecentViewStyle = viewStyle === ConversationViewStyle.RECENT;
-  const isFolderViewStyle = viewStyle === ConversationViewStyle.FOLDER;
+  const isPreferences = currentTab === SidebarTabs.PREFERENCES;
+
+  const showSearchInput = [
+    SidebarTabs.RECENT,
+    SidebarTabs.FOLDER,
+    SidebarTabs.FAVORITES,
+    SidebarTabs.GROUPS,
+    SidebarTabs.DIRECTS,
+    SidebarTabs.ARCHIVES,
+  ].includes(currentTab);
+
+  const {setCurrentView} = useAppMainState(useShallow(state => state.responsiveView));
+  const {openFolder, closeFolder, expandedFolder, isFoldersTabOpen, toggleFoldersTab} = useFolderStore(
+    useShallow(state => state),
+  );
+  const {currentFocus, handleKeyDown, resetConversationFocus} = useConversationFocus(conversations);
+
+  // false when screen is larger than 1000px
+  // true when screen is smaller than 1000px
+  const isScreenLessThanMdBreakpoint = useMatchMedia('(max-width: 1000px)');
+  const isSideBarOpen = sidebarStatus === SidebarStatus.OPEN;
+
+  useEffect(() => {
+    if (isScreenLessThanMdBreakpoint) {
+      setSidebarStatus(SidebarStatus.CLOSED);
+      amplify.publish(WebAppEvents.ANALYTICS.EVENT, EventName.UI.SIDEBAR_COLLAPSE);
+    }
+  }, [isScreenLessThanMdBreakpoint, setSidebarStatus]);
+
+  const {conversations: currentTabConversations, searchInputPlaceholder} = getTabConversations({
+    currentTab,
+    conversations,
+    conversationsFilter,
+    archivedConversations,
+    groupConversations,
+    directConversations,
+    favoriteConversations,
+  });
+
+  const currentFolder = labels
+    .map(label => createLabel(label.name, conversationLabelRepository.getLabelConversations(label), label.id))
+    .find(folder => folder.id === expandedFolder);
+
+  const groupParticipantsConversations = getGroupParticipantsConversations({
+    currentTab,
+    conversationRepository,
+    searchRepository,
+    conversationsFilter,
+    favoriteConversations,
+    conversations: currentTabConversations,
+    currentFolder,
+    archivedConversations,
+  });
+
+  const isGroupParticipantsVisible =
+    !!conversationsFilter &&
+    ![SidebarTabs.DIRECTS, SidebarTabs.GROUPS, SidebarTabs.FAVORITES].includes(currentTab) &&
+    groupParticipantsConversations.length > 0;
 
   const hasNoConversations = conversations.length + connectRequests.length === 0;
-  const {isOpen: isFolderOpen, openFolder} = useFolderState();
+  const hasEmptyConversationsList =
+    !isGroupParticipantsVisible &&
+    ((showSearchInput && currentTabConversations.length === 0) ||
+      (hasNoConversations && currentTab !== SidebarTabs.ARCHIVES));
 
-  const {conversationLabelRepository} = conversationRepository;
+  const toggleSidebar = useCallback(() => {
+    if (isFoldersTabOpen) {
+      toggleFoldersTab();
+    }
 
-  const {setCurrentView} = useAppMainState(state => state.responsiveView);
-  const {close: closeRightSidebar} = useAppMainState(state => state.rightSidebar);
+    setSidebarStatus(isSideBarOpen ? SidebarStatus.CLOSED : SidebarStatus.OPEN);
+    amplify.publish(
+      WebAppEvents.ANALYTICS.EVENT,
+      isSideBarOpen ? EventName.UI.SIDEBAR_COLLAPSE : EventName.UI.SIDEBAR_UNCOLLAPSE,
+    );
+  }, [isFoldersTabOpen, isSideBarOpen, setSidebarStatus, toggleFoldersTab]);
 
-  const showLegalHold = isOnLegalHold || hasPendingLegalHold;
+  useEffect(() => {
+    amplify.subscribe(WebAppEvents.CONVERSATION.SHOW, (conversation?: Conversation) => {
+      if (!conversation) {
+        return;
+      }
 
-  const onClickPreferences = () => {
-    setCurrentView(ViewType.LEFT_SIDEBAR);
-    switchList(ListState.PREFERENCES);
-    closeRightSidebar();
-  };
+      const includesConversation = currentTabConversations.includes(conversation);
+
+      if (!includesConversation) {
+        setCurrentTab(SidebarTabs.RECENT);
+      }
+    });
+  }, [currentTabConversations]);
 
   useEffect(() => {
     if (activeConversation && !conversationState.isVisible(activeConversation)) {
@@ -139,12 +244,7 @@ const Conversations: React.FC<ConversationsProps> = ({
       return () => {};
     }
 
-    const conversationLabels = conversationLabelRepository.getConversationLabelIds(activeConversation);
     amplify.subscribe(WebAppEvents.CONTENT.EXPAND_FOLDER, openFolder);
-
-    if (!conversationLabels.some(isFolderOpen)) {
-      openFolder(conversationLabels[0]);
-    }
 
     return () => {
       amplify.unsubscribe(WebAppEvents.CONTENT.EXPAND_FOLDER, openFolder);
@@ -152,193 +252,192 @@ const Conversations: React.FC<ConversationsProps> = ({
   }, [activeConversation]);
 
   useEffect(() => {
-    const openFavorites = () => openFolder(DefaultLabelIds.Favorites);
+    const openFavorites = () => changeTab(SidebarTabs.FAVORITES);
     conversationLabelRepository.addEventListener('conversation-favorited', openFavorites);
     return () => {
       conversationLabelRepository.removeEventListener('conversation-favorited', openFavorites);
     };
   }, []);
 
-  useEffect(() => {
-    propertiesRepository.savePreference(PROPERTIES_TYPE.INTERFACE.VIEW_FOLDERS, isFolderViewStyle);
-  }, [isFolderViewStyle]);
+  const clearConversationFilter = useCallback(() => setConversationsFilter(''), []);
 
-  const header = (
-    <>
-      <button
-        type="button"
-        className={cx(`conversations-settings-button accent-text`, {'conversations-settings--badge': showBadge})}
-        title={t('tooltipConversationsPreferences')}
-        onClick={onClickPreferences}
-        data-uie-name="go-preferences"
-      >
-        <Icon.Settings />
-      </button>
+  const switchList = listViewModel.switchList;
+  const switchContent = listViewModel.contentViewModel.switchContent;
 
-      {teamState.isTeam() ? (
-        <>
-          <button
-            type="button"
-            className="left-list-header-availability"
-            css={{...(showLegalHold && {gridColumn: '2/3'})}}
-            onClick={event => AvailabilityContextMenu.show(event.nativeEvent, 'left-list-availability-menu')}
-          >
-            <UserInfo user={selfUser} className="availability-state" dataUieName="status-availability" showAvailability>
-              <UserVerificationBadges
-                user={selfUser}
-                isSelfUser
-                groupId={conversationState.selfMLSConversation()?.groupId}
-              />
-            </UserInfo>
-          </button>
+  const onExitPreferences = useCallback(() => {
+    setCurrentView(ViewType.MOBILE_LEFT_SIDEBAR);
+    switchList(ListState.CONVERSATIONS);
+    switchContent(ContentState.CONVERSATION);
+  }, []);
 
-          {showLegalHold && (
-            <LegalHoldDot
-              isPending={hasPendingLegalHold}
-              dataUieName={hasPendingLegalHold ? 'status-legal-hold-pending' : 'status-legal-hold'}
-              showText
-              isInteractive
-            />
-          )}
-        </>
-      ) : (
-        <span
-          className="left-list-header-text"
-          data-uie-name="status-name"
-          role="presentation"
-          tabIndex={TabIndex.FOCUSABLE}
-        >
-          {userName}
-        </span>
-      )}
-    </>
+  const changeTab = useCallback(
+    (nextTab: SidebarTabs, folderId?: string) => {
+      if (!folderId) {
+        closeFolder();
+      }
+
+      if (nextTab === SidebarTabs.ARCHIVES) {
+        // will eventually load missing events from the db
+        void conversationRepository.updateArchivedConversations();
+      }
+
+      if (nextTab !== SidebarTabs.PREFERENCES) {
+        onExitPreferences();
+      }
+
+      clearConversationFilter();
+      setCurrentTab(nextTab);
+    },
+    [conversationRepository],
   );
 
-  const footer = (
-    <nav className="conversations-footer">
-      <div
-        role="tablist"
-        aria-label={t('accessibility.headings.sidebar')}
-        aria-owns="tab-1 tab-2 tab-3"
-        className="conversations-footer-list"
-      >
-        <button
-          id="tab-1"
-          type="button"
-          className="conversations-footer-btn"
-          onClick={() => switchList(ListState.START_UI)}
-          title={t('tooltipConversationsStart', Shortcut.getShortcutTooltip(ShortcutType.START))}
-          data-uie-name="go-people"
-        >
-          <Icon.PeopleOutline className="people-outline" />
-          <span className="conversations-footer-btn--text">{t('conversationFooterContacts')}</span>
-        </button>
+  const onClickPreferences = useCallback((itemId: ContentState) => {
+    switchList(ListState.PREFERENCES);
+    setCurrentView(ViewType.MOBILE_CENTRAL_COLUMN);
+    switchContent(itemId);
 
-        <button
-          id="tab-2"
-          type="button"
-          role="tab"
-          className={cx(`conversations-footer-btn`, {active: isRecentViewStyle})}
-          onClick={() => setViewStyle(ConversationViewStyle.RECENT)}
-          title={t('conversationViewTooltip')}
-          data-uie-name="go-recent-view"
-          data-uie-status={isRecentViewStyle ? 'active' : 'inactive'}
-          aria-selected={isRecentViewStyle}
-        >
-          <Icon.ConversationsOutline className={cx('conversations-outline', {active: isRecentViewStyle})} />
-          <span className="conversations-footer-btn--text">{t('conversationViewTooltip')}</span>
-        </button>
+    setTimeout(() => {
+      const centerColumn = document.getElementById('center-column');
+      const nextElementToFocus = centerColumn?.querySelector("[tabindex='0']") as HTMLElement | null;
+      nextElementToFocus?.focus();
+    }, ANIMATED_PAGE_TRANSITION_DURATION + 1);
+  }, []);
 
-        <button
-          id="tab-3"
-          type="button"
-          role="tab"
-          className={cx(`conversations-footer-btn`, {active: isFolderViewStyle})}
-          onClick={() => setViewStyle(ConversationViewStyle.FOLDER)}
-          title={t('folderViewTooltip')}
-          data-uie-name="go-folder-view"
-          data-uie-status={isFolderViewStyle ? 'active' : 'inactive'}
-          aria-selected={isFolderViewStyle}
-        >
-          <Icon.FoldersOutline className={cx('folders-outline', {active: isFolderViewStyle})} />
-          <span className="conversations-footer-btn--text">{t('folderViewTooltip')}</span>
-        </button>
+  const handleEnterSearchClick = useCallback(
+    (event: ReactKeyBoardEvent<HTMLDivElement>) => {
+      const firstFoundConversation = currentTabConversations?.[0];
 
-        {archivedConversations.length > 0 && (
-          <button
-            type="button"
-            className="conversations-footer-btn"
-            data-uie-name="go-archive"
-            onClick={() => switchList(ListState.ARCHIVE)}
-            title={t('tooltipConversationsArchived', archivedConversations.length)}
-          >
-            <Icon.ArchiveOutline className="archive-outline" />
-            <span className="conversations-footer-btn--text">{t('conversationFooterArchive')}</span>
-          </button>
-        )}
-      </div>
-    </nav>
+      if (firstFoundConversation) {
+        createNavigateKeyboard(generateConversationUrl(firstFoundConversation.qualifiedId), true)(event);
+        setConversationsFilter('');
+        scrollToConversation(firstFoundConversation.id);
+      }
+    },
+    [currentTabConversations],
   );
 
-  const callingView = (
-    <>
-      {activeCalls.map(call => {
-        const conversation = conversationState.findConversation(call.conversationId);
-        const callingViewModel = listViewModel.callingViewModel;
-        const callingRepository = callingViewModel.callingRepository;
-
-        return (
-          conversation && (
-            <div className="calling-cell" key={conversation.id}>
-              <CallingCell
-                classifiedDomains={classifiedDomains}
-                call={call}
-                callActions={callingViewModel.callActions}
-                callingRepository={callingRepository}
-                conversation={conversation}
-                isFullUi
-                hasAccessToCamera={callingViewModel.hasAccessToCamera()}
-                isSelfVerified={selfUser.is_verified()}
-                multitasking={callingViewModel.multitasking}
-              />
-            </div>
-          )
-        );
-      })}
-    </>
+  const onSearch = useCallback(
+    (searchValue: string) => {
+      setConversationsFilter(searchValue);
+      conversationListRef?.scrollTo(0, 0);
+    },
+    [conversationListRef],
   );
 
-  const {currentFocus, handleKeyDown, resetConversationFocus} = useConversationFocus(conversations);
+  const jumpToRecentSearch = useCallback(() => {
+    switchList(ListState.CONVERSATIONS);
+    setCurrentTab(SidebarTabs.RECENT);
+  }, []);
 
   return (
-    <ListWrapper id="conversations" headerElement={header} footer={footer} before={callingView}>
-      {hasNoConversations ? (
-        <>
-          {archivedConversations.length === 0 ? (
-            <div className="conversations-hint" data-uie-name="status-start-conversation-hint">
-              <div className="conversations-hint-text">{t('conversationsNoConversations')}</div>
-              <Icon.ArrowDownLong className="conversations-hint-arrow" />
-            </div>
-          ) : (
-            <div className="conversations-all-archived">{t('conversationsAllArchived')}</div>
-          )}
-        </>
-      ) : (
-        <ConversationsList
-          connectRequests={connectRequests}
-          callState={callState}
-          conversations={conversations}
-          viewStyle={viewStyle}
-          listViewModel={listViewModel}
-          conversationState={conversationState}
-          conversationRepository={conversationRepository}
-          currentFocus={currentFocus}
-          resetConversationFocus={resetConversationFocus}
-          handleArrowKeyDown={handleKeyDown}
-        />
-      )}
-    </ListWrapper>
+    <div className="conversations-wrapper">
+      <div className="conversations-sidebar-spacer" css={conversationsSpacerStyles(isScreenLessThanMdBreakpoint)} />
+      <ListWrapper
+        id="conversations"
+        headerElement={
+          <ConversationHeader
+            currentFolder={currentFolder}
+            currentTab={currentTab}
+            selfUser={selfUser}
+            showSearchInput={(showSearchInput && currentTabConversations.length !== 0) || !!conversationsFilter}
+            searchValue={conversationsFilter}
+            setSearchValue={onSearch}
+            searchInputPlaceholder={searchInputPlaceholder}
+            onSearchEnterClick={handleEnterSearchClick}
+            jumpToRecentSearch={jumpToRecentSearch}
+            searchInputRef={searchInputRef}
+          />
+        }
+        setConversationListRef={setConversationListRef}
+        hasHeader={!isPreferences}
+        sidebar={
+          !isTemporaryGuest && (
+            <ConversationSidebar
+              isOpen={isSideBarOpen}
+              toggleOpen={toggleSidebar}
+              isScreenLessThanMdBreakpoint={isScreenLessThanMdBreakpoint}
+              selfUser={selfUser}
+              conversationState={conversationState}
+              isTeam={isTeam}
+              changeTab={changeTab}
+              currentTab={currentTab}
+              groupConversations={groupConversations}
+              directConversations={directConversations}
+              unreadConversations={unreadConversations}
+              favoriteConversations={favoriteConversations}
+              archivedConversations={archivedConversations}
+              conversationRepository={conversationRepository}
+              onClickPreferences={onClickPreferences}
+              showNotificationsBadge={notifications.length > 0}
+              userRepository={userRepository}
+              teamRepository={teamRepository}
+            />
+          )
+        }
+        footer={
+          <ConversationCallingView
+            activeCalls={activeCalls}
+            listViewModel={listViewModel}
+            classifiedDomains={classifiedDomains}
+            propertiesRepository={propertiesRepository}
+          />
+        }
+      >
+        {isPreferences ? (
+          <Preferences
+            onPreferenceItemClick={onClickPreferences}
+            teamRepository={teamRepository}
+            preferenceNotificationRepository={preferenceNotificationRepository}
+            {...(isTemporaryGuest && {
+              onClose: onExitPreferences,
+            })}
+          />
+        ) : (
+          <>
+            {currentTab === SidebarTabs.CONNECT && (
+              <StartUI
+                conversationRepository={conversationRepository}
+                searchRepository={searchRepository}
+                teamRepository={teamRepository}
+                integrationRepository={integrationRepository}
+                mainViewModel={listViewModel.mainViewModel}
+                userRepository={userRepository}
+                isFederated={listViewModel.isFederated}
+                selfUser={selfUser}
+              />
+            )}
+
+            {hasEmptyConversationsList && (
+              <EmptyConversationList
+                currentTab={currentTab}
+                onChangeTab={changeTab}
+                searchValue={conversationsFilter}
+              />
+            )}
+
+            {showSearchInput && (
+              <ConversationsList
+                conversationsFilter={conversationsFilter}
+                currentFolder={currentFolder}
+                conversationLabelRepository={conversationLabelRepository}
+                callState={callState}
+                currentFocus={currentFocus}
+                listViewModel={listViewModel}
+                connectRequests={connectRequests}
+                handleArrowKeyDown={handleKeyDown}
+                conversationState={conversationState}
+                conversations={currentTabConversations}
+                resetConversationFocus={resetConversationFocus}
+                clearSearchFilter={clearConversationFilter}
+                isEmpty={hasEmptyConversationsList}
+                groupParticipantsConversations={groupParticipantsConversations}
+                isGroupParticipantsVisible={isGroupParticipantsVisible}
+                searchInputRef={searchInputRef}
+              />
+            )}
+          </>
+        )}
+      </ListWrapper>
+    </div>
   );
 };
-
-export {Conversations};

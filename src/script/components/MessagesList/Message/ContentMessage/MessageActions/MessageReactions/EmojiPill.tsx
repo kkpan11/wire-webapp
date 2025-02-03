@@ -17,8 +17,6 @@
  *
  */
 
-import {FC, useState} from 'react';
-
 import {Tooltip} from '@wireapp/react-ui-kit';
 
 import {useMessageFocusedTabIndex} from 'Components/MessagesList/Message/util';
@@ -57,7 +55,7 @@ export interface EmojiPillProps {
 
 const MAX_USER_NAMES_TO_SHOW = 2;
 
-export const EmojiPill: FC<EmojiPillProps> = ({
+export const EmojiPill = ({
   emoji,
   emojiUnicode,
   handleReactionClick,
@@ -69,40 +67,41 @@ export const EmojiPill: FC<EmojiPillProps> = ({
   emojiListCount,
   hasUserReacted,
   reactingUsers,
-}) => {
+}: EmojiPillProps) => {
   const messageFocusedTabIndex = useMessageFocusedTabIndex(isMessageFocused);
-  const [isOpen, setTooltipVisibility] = useState(false);
   const emojiName = getEmojiTitleFromEmojiUnicode(emojiUnicode);
   const isActive = hasUserReacted && !isRemovedFromConversation;
 
   const emojiCount = reactingUsers.length;
 
-  const showTooltip = () => {
-    setTooltipVisibility(true);
-  };
-
-  const hideTooltip = () => {
-    setTooltipVisibility(false);
-  };
-
   const reactingUserNames = reactingUsers.slice(0, MAX_USER_NAMES_TO_SHOW).map(user => user.name());
 
   const conversationReactionCaption = () => {
     if (emojiCount > MAX_USER_NAMES_TO_SHOW) {
-      return t('conversationLikesCaptionPluralMoreThan2', {
-        number: (emojiCount - MAX_USER_NAMES_TO_SHOW).toString(),
-        userNames: reactingUserNames.join(', '),
-      });
+      return t(
+        'conversationLikesCaptionPluralMoreThan2',
+        {
+          number: (emojiCount - MAX_USER_NAMES_TO_SHOW).toString(),
+          userNames: reactingUserNames.join(', '),
+        },
+        {},
+        true,
+      );
     }
 
     if (emojiCount === MAX_USER_NAMES_TO_SHOW) {
-      return t('conversationLikesCaptionPlural', {
-        firstUser: reactingUserNames[0],
-        secondUser: reactingUserNames[1],
-      });
+      return t(
+        'conversationLikesCaptionPlural',
+        {
+          firstUser: reactingUserNames[0],
+          secondUser: reactingUserNames[1],
+        },
+        {},
+        true,
+      );
     }
 
-    return t('conversationLikesCaptionSingular', {userName: reactingUserNames?.[0] || ''});
+    return t('conversationLikesCaptionSingular', {userName: reactingUserNames?.[0] || ''}, {}, true);
   };
 
   const caption = conversationReactionCaption();
@@ -129,7 +128,7 @@ export const EmojiPill: FC<EmojiPillProps> = ({
   ]);
 
   return (
-    <div onMouseEnter={showTooltip} onMouseLeave={hideTooltip} onFocus={showTooltip} onBlur={hideTooltip}>
+    !!emojiCount && (
       <Tooltip
         body={
           <div css={messageReactionButtonTooltip}>
@@ -142,7 +141,6 @@ export const EmojiPill: FC<EmojiPillProps> = ({
             </p>
           </div>
         }
-        isOpen={isOpen}
       >
         <button
           css={{...messageReactionButton, ...getReactionsButtonCSS(isActive, isRemovedFromConversation)}}
@@ -173,6 +171,6 @@ export const EmojiPill: FC<EmojiPillProps> = ({
           <span css={messageReactionCount(isActive)}>{emojiCount}</span>
         </button>
       </Tooltip>
-    </div>
+    )
   );
 };

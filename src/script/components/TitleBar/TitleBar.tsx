@@ -24,19 +24,19 @@ import {amplify} from 'amplify';
 import cx from 'classnames';
 import {container} from 'tsyringe';
 
-import {IconButton, IconButtonVariant, useMatchMedia} from '@wireapp/react-ui-kit';
+import {IconButton, IconButtonVariant, QUERY, useMatchMedia} from '@wireapp/react-ui-kit';
 import {WebAppEvents} from '@wireapp/webapp-events';
 
+import {ConversationVerificationBadges} from 'Components/Badge';
 import {useCallAlertState} from 'Components/calling/useCallAlertState';
-import {Icon} from 'Components/Icon';
+import * as Icon from 'Components/Icon';
 import {LegalHoldDot} from 'Components/LegalHoldDot';
-import {ConversationVerificationBadges} from 'Components/VerificationBadge';
 import {User} from 'src/script/entity/User';
 import {useAppMainState, ViewType} from 'src/script/page/state';
 import {ContentState} from 'src/script/page/useAppState';
 import {useKoSubscribableChildren} from 'Util/ComponentUtil';
-import {handleKeyDown} from 'Util/KeyboardUtil';
-import {StringIdentifer, t} from 'Util/LocalizerUtil';
+import {handleKeyDown, KEY} from 'Util/KeyboardUtil';
+import {t} from 'Util/LocalizerUtil';
 import {matchQualifiedIds} from 'Util/QualifiedId';
 import {TIME_IN_MILLIS} from 'Util/TimeUtil';
 
@@ -128,7 +128,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
 
   const hasCall = useMemo(() => {
     const hasEntities = !!joinedCall;
-    return hasEntities && matchQualifiedIds(conversation.qualifiedId, joinedCall.conversationId);
+    return hasEntities && matchQualifiedIds(conversation.qualifiedId, joinedCall.conversation.qualifiedId);
   }, [conversation, joinedCall]);
 
   const showCallControls = ConversationFilter.showCallControls(conversation, hasCall);
@@ -138,18 +138,18 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   const conversationSubtitle = is1to1 && firstUserEntity?.isFederated ? firstUserEntity?.handle ?? '' : '';
 
   const shortcut = Shortcut.getShortcutTooltip(ShortcutType.PEOPLE);
-  const peopleTooltip = t('tooltipConversationPeople', shortcut);
+  const peopleTooltip = t('tooltipConversationPeople', {shortcut});
 
   // To be changed when design chooses a breakpoint, the conditional can be integrated to the ui-kit directly
-  const mdBreakpoint = useMatchMedia('max-width: 768px');
-  const smBreakpoint = useMatchMedia('max-width: 640px');
+  const mdBreakpoint = useMatchMedia('max-width: 1000px');
+  const smBreakpoint = useMatchMedia(QUERY.tabletSMDown);
 
   const {close: closeRightSidebar} = useAppMainState(state => state.rightSidebar);
 
   const {setCurrentView: setView} = useAppMainState(state => state.responsiveView);
 
   const setLeftSidebar = () => {
-    setView(ViewType.LEFT_SIDEBAR);
+    setView(ViewType.MOBILE_LEFT_SIDEBAR);
     closeRightSidebar();
   };
 
@@ -163,6 +163,10 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   );
 
   const showAddParticipant = useCallback(() => {
+    if (is1to1) {
+      return;
+    }
+
     if (!isActiveParticipant) {
       return showDetails(false);
     }
@@ -172,20 +176,18 @@ export const TitleBar: React.FC<TitleBarProps> = ({
     } else {
       amplify.publish(WebAppEvents.CONVERSATION.CREATE_GROUP, 'conversation_details', firstUserEntity);
     }
-  }, [firstUserEntity, isActiveParticipant, isGroup, showDetails]);
+  }, [firstUserEntity, isActiveParticipant, isGroup, showDetails, is1to1]);
 
   useEffect(() => {
     // TODO remove the titlebar for now to ensure that buttons are clickable in macOS wrappers
     window.setTimeout(() => document.querySelector('.titlebar')?.remove(), TIME_IN_MILLIS.SECOND);
 
-    window.setTimeout(() => {
-      amplify.subscribe(WebAppEvents.SHORTCUT.PEOPLE, () => showDetails(false));
-      amplify.subscribe(WebAppEvents.SHORTCUT.ADD_PEOPLE, () => {
-        if (isActivatedAccount) {
-          showAddParticipant();
-        }
-      });
-    }, 50);
+    amplify.subscribe(WebAppEvents.SHORTCUT.PEOPLE, () => showDetails(false));
+    amplify.subscribe(WebAppEvents.SHORTCUT.ADD_PEOPLE, () => {
+      if (isActivatedAccount) {
+        showAddParticipant();
+      }
+    });
 
     return () => {
       amplify.unsubscribeAll(WebAppEvents.SHORTCUT.PEOPLE);
@@ -250,7 +252,13 @@ export const TitleBar: React.FC<TitleBarProps> = ({
           onClick={onClickDetails}
           title={peopleTooltip}
           aria-label={peopleTooltip}
-          onKeyDown={event => handleKeyDown(event, onClickDetails)}
+          onKeyDown={event =>
+            handleKeyDown({
+              event,
+              callback: onClickDetails,
+              keys: [KEY.ENTER, KEY.SPACE],
+            })
+          }
           data-placement="bottom"
           role="button"
           tabIndex={TabIndex.FOCUSABLE}
@@ -294,7 +302,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
                 data-uie-name="do-video-call"
                 disabled={isReadOnlyConversation}
               >
-                <Icon.Camera />
+                <Icon.CameraIcon />
               </button>
             )}
 
@@ -311,7 +319,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
               data-uie-name="do-call"
               disabled={isReadOnlyConversation}
             >
-              <Icon.Pickup />
+              <Icon.PickupIcon />
             </button>
           </div>
         )}
@@ -337,7 +345,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
                 data-uie-name="do-call"
                 disabled={isReadOnlyConversation}
               >
-                <Icon.Pickup />
+                <Icon.PickupIcon />
               </IconButton>
             )}
           </>
@@ -350,7 +358,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
             className={cx('conversation-title-bar-icon', {active: isRightSidebarOpen})}
             data-uie-name="do-open-info"
           >
-            <Icon.Info />
+            <Icon.InfoIcon />
           </button>
         )}
       </li>
@@ -366,6 +374,24 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   );
 };
 
+type BadgeKeys =
+  | 'External'
+  | 'ExternalAndGuest'
+  | 'ExternalAndGuestAndService'
+  | 'ExternalAndService'
+  | 'Federated'
+  | 'FederatedAndExternal'
+  | 'FederatedAndExternalAndGuest'
+  | 'FederatedAndExternalAndGuestAndService'
+  | 'FederatedAndExternalAndService'
+  | 'FederatedAndGuest'
+  | 'FederatedAndGuestAndService'
+  | 'FederatedAndService'
+  | 'GuestAndService'
+  | 'Service';
+
+type WarningBadgeKey = '' | 'guestRoomConversationBadge' | `${'guestRoomConversationBadge'}${BadgeKeys}`;
+
 export function generateWarningBadgeKey({
   hasFederated,
   hasExternal,
@@ -376,7 +402,7 @@ export function generateWarningBadgeKey({
   hasFederated?: boolean;
   hasGuest?: boolean;
   hasService?: boolean;
-}): StringIdentifer {
+}): WarningBadgeKey {
   const baseKey = 'guestRoomConversationBadge';
   const extras = [];
   if (hasGuest && !hasExternal && !hasService && !hasFederated) {
@@ -397,5 +423,5 @@ export function generateWarningBadgeKey({
   if (!extras.length) {
     return '';
   }
-  return `${baseKey}${extras.join('And')}` as StringIdentifer;
+  return `${baseKey}${extras.join('And')}` as WarningBadgeKey;
 }

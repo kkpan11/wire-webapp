@@ -22,10 +22,11 @@ import React from 'react';
 import {TabIndex} from '@wireapp/react-ui-kit/lib/types/enums';
 
 import {Avatar, AVATAR_SIZE} from 'Components/Avatar';
-import {UserStatusBadges} from 'Components/UserBadges';
+import {UserStatusBadges} from 'Components/Badge';
+import {CallParticipantsListItemHandRaiseIcon} from 'Components/calling/CallParticipantsListItem/CallParticipantsListItemHandRaiseIcon';
 import {Participant} from 'src/script/calling/Participant';
 import {useKoSubscribableChildren} from 'Util/ComponentUtil';
-import {handleKeyDown} from 'Util/KeyboardUtil';
+import {handleKeyDown, KEY} from 'Util/KeyboardUtil';
 import {t} from 'Util/LocalizerUtil';
 import {setContextMenuPosition} from 'Util/util';
 
@@ -42,22 +43,21 @@ export interface CallParticipantsListItemProps {
   callParticipant: Participant;
   showContextMenu: boolean;
   onContextMenu: (event: React.MouseEvent<HTMLDivElement, MouseEvent>) => void;
-  selfInTeam?: boolean;
   isSelfVerified?: boolean;
   isLast?: boolean;
+  handRaisedAt?: number | null;
 }
 
 export const CallParticipantsListItem = ({
   callParticipant,
   isSelfVerified = false,
-  selfInTeam,
   showContextMenu,
   onContextMenu,
   isLast = false,
+  handRaisedAt = null,
 }: CallParticipantsListItemProps) => {
   const {user} = callParticipant;
   const {isMe: isSelf, isFederated} = user;
-
   const {isAudioEstablished} = useKoSubscribableChildren(callParticipant, ['isAudioEstablished']);
 
   const {
@@ -68,9 +68,13 @@ export const CallParticipantsListItem = ({
   } = useKoSubscribableChildren(user, ['isDirectGuest', 'is_verified', 'name', 'isExternal']);
 
   const handleContextKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    handleKeyDown(event, () => {
-      const newEvent = setContextMenuPosition(event);
-      onContextMenu?.(newEvent as unknown as React.MouseEvent<HTMLDivElement>);
+    handleKeyDown({
+      event,
+      callback: () => {
+        const newEvent = setContextMenuPosition(event);
+        onContextMenu?.(newEvent as unknown as React.MouseEvent<HTMLDivElement>);
+      },
+      keys: [KEY.ENTER, KEY.SPACE],
     });
   };
 
@@ -103,11 +107,12 @@ export const CallParticipantsListItem = ({
         <CallParticipantItemContent
           isAudioEstablished={isAudioEstablished}
           user={user}
-          selfInTeam={selfInTeam}
           isSelf={isSelf}
           showContextMenu={showContextMenu}
           onDropdownClick={event => onContextMenu?.(event as unknown as React.MouseEvent<HTMLDivElement>)}
         />
+
+        {handRaisedAt && <CallParticipantsListItemHandRaiseIcon handRaisedAt={handRaisedAt} />}
 
         {isAudioEstablished ? (
           <>

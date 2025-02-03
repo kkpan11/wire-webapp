@@ -26,14 +26,13 @@ import {container} from 'tsyringe';
 import {Link, LinkVariant} from '@wireapp/react-ui-kit';
 
 import {FadingScrollbar} from 'Components/FadingScrollbar';
-import {Icon} from 'Components/Icon';
-import {ModalComponent} from 'Components/ModalComponent';
+import * as Icon from 'Components/Icon';
+import {ModalComponent} from 'Components/Modals/ModalComponent';
 import {EnrichedFields} from 'Components/panel/EnrichedFields';
 import {UserActions} from 'Components/panel/UserActions';
 import {UserDetails} from 'Components/panel/UserDetails';
-import {getPrivacyUnverifiedUsersUrl} from 'src/script/externalRoute';
 import {useKoSubscribableChildren} from 'Util/ComponentUtil';
-import {handleKeyDown} from 'Util/KeyboardUtil';
+import {handleKeyDown, KEY} from 'Util/KeyboardUtil';
 import {replaceLink, t} from 'Util/LocalizerUtil';
 
 import {useUserModalState} from './UserModal.state';
@@ -82,7 +81,7 @@ const UserModalUserActionsSection: React.FC<UserModalUserActionsSectionProps> = 
       <div
         className="modal__message"
         data-uie-name="status-blocked-legal-hold"
-        dangerouslySetInnerHTML={{__html: t('modalUserBlockedForLegalHold', {}, replaceLinkLegalHold)}}
+        dangerouslySetInnerHTML={{__html: t('modalUserBlockedForLegalHold', undefined, replaceLinkLegalHold)}}
       />
     );
   }
@@ -110,14 +109,14 @@ interface UnverifiedUserWarningProps {
 export const UnverifiedUserWarning: React.FC<UnverifiedUserWarningProps> = ({user}) => {
   return (
     <div css={{display: 'flex', color: 'var(--danger-color)', fill: 'var(--danger-color)', margin: '1em 0'}}>
-      <Icon.Info css={{height: '1rem', margin: '0.15em 1em', minWidth: '1rem'}} />
+      <Icon.InfoIcon css={{height: '1rem', margin: '0.15em 1em', minWidth: '1rem'}} />
       <p css={{fontSize: 'var(--font-size-medium)'}}>
         {user ? t('userNotVerified', {user: user.name()}) : t('conversationConnectionVerificationWarning')}
         <Link
           css={{fontSize: 'var(--font-size-medium)', margin: '0 0.2em'}}
           variant={LinkVariant.PRIMARY}
           targetBlank
-          href={getPrivacyUnverifiedUsersUrl()}
+          href={Config.getConfig().URL.SUPPORT.PRIVACY_UNVERIFIED_USERS}
         >
           {t('modalUserLearnMore')}
         </Link>
@@ -146,12 +145,15 @@ const UserModal: React.FC<UserModalProps> = ({
     onClose?.();
     resetState();
   };
-  const {classifiedDomains} = useKoSubscribableChildren(teamState, ['classifiedDomains']);
-  const {is_trusted: isTrusted, isActivatedAccount} = useKoSubscribableChildren(selfUser, [
-    'is_trusted',
-    'isActivatedAccount',
-  ]);
+  const {classifiedDomains, isTeam} = useKoSubscribableChildren(teamState, ['classifiedDomains', 'isTeam']);
+  const {
+    is_trusted: isTrusted,
+    isActivatedAccount,
+    isTemporaryGuest,
+  } = useKoSubscribableChildren(selfUser, ['is_trusted', 'isActivatedAccount', 'isTemporaryGuest']);
   const isFederated = core.backendFeatures?.isFederated;
+
+  const isSameTeam = user && user.teamId && selfUser.teamId && user.teamId === selfUser.teamId;
 
   useEffect(() => {
     if (userId) {
@@ -188,14 +190,20 @@ const UserModal: React.FC<UserModalProps> = ({
       <div className="modal__header">
         {userNotFound && (
           <h2 className="modal__header__title" data-uie-name="status-modal-title">
-            {t('userNotFoundTitle', brandName)}
+            {t('userNotFoundTitle', {brandName})}
           </h2>
         )}
 
-        <Icon.Close
+        <Icon.CloseIcon
           className="modal__header__button"
           onClick={hide}
-          onKeyDown={event => handleKeyDown(event, hide)}
+          onKeyDown={event =>
+            handleKeyDown({
+              event,
+              callback: hide,
+              keys: [KEY.ENTER, KEY.SPACE],
+            })
+          }
           data-uie-name="do-close"
           tabIndex={TabIndex.FOCUSABLE}
         />
@@ -208,9 +216,13 @@ const UserModal: React.FC<UserModalProps> = ({
           <>
             <UserDetails participant={user} classifiedDomains={classifiedDomains} />
 
-            <EnrichedFields user={user} showDomain={isFederated} />
+            <EnrichedFields
+              user={user}
+              showDomain={isFederated}
+              showAvailability={isTeam && !isTemporaryGuest && teamState.isInTeam(user)}
+            />
 
-            {!isTrusted && <UnverifiedUserWarning user={user} />}
+            {!isTrusted && !isSameTeam && <UnverifiedUserWarning user={user} />}
 
             <UserModalUserActionsSection
               user={user}
@@ -222,14 +234,14 @@ const UserModal: React.FC<UserModalProps> = ({
         )}
         {isShown && !user && !userNotFound && (
           <div className="loading-wrapper">
-            <Icon.Loading aria-hidden="true" />
+            <Icon.LoadingIcon aria-hidden="true" />
           </div>
         )}
 
         {userNotFound && (
           <>
             <div className="modal__message" data-uie-name="status-modal-text">
-              {t('userNotFoundMessage', brandName)}
+              {t('userNotFoundMessage', {brandName})}
             </div>
 
             <div className="modal__buttons">

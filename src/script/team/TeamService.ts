@@ -20,6 +20,7 @@
 import type {ConversationRolesList} from '@wireapp/api-client/lib/conversation/ConversationRole';
 import type {FeatureList} from '@wireapp/api-client/lib/team/feature/';
 import {FeatureStatus, FEATURE_KEY} from '@wireapp/api-client/lib/team/feature/';
+import {TeamMigrationPayload} from '@wireapp/api-client/lib/team/invitation/TeamMigrationPayload';
 import type {LegalHoldMemberData} from '@wireapp/api-client/lib/team/legalhold/';
 import type {MemberData, Members} from '@wireapp/api-client/lib/team/member/';
 import type {Services} from '@wireapp/api-client/lib/team/service/';
@@ -68,6 +69,10 @@ export class TeamService {
     return status === 'enabled';
   }
 
+  async upgradePersonalToTeamUser(payload: TeamMigrationPayload) {
+    return this.apiClient.api.teams.invitation.upgradePersonalToTeamUser(payload);
+  }
+
   getAllTeamFeatures(): Promise<FeatureList> {
     return this.apiClient.api.teams.feature.getAllFeatures().catch(() => {
       // The following code enables all default features to ensure that modern webapps work with legacy backends (backends that don't provide a "feature-configs" endpoint)
@@ -86,6 +91,7 @@ export class TeamService {
           status: FeatureStatus.DISABLED,
         },
         [FEATURE_KEY.CONFERENCE_CALLING]: {
+          config: {useSFTForOneToOneCalls: false},
           status: FeatureStatus.ENABLED,
         },
         [FEATURE_KEY.DIGITAL_SIGNATURES]: {

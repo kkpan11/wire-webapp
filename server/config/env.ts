@@ -78,16 +78,9 @@ export type Env = {
   FEATURE_ALLOWED_FILE_UPLOAD_EXTENSIONS: string;
 
   /** will enable the MLS protocol */
-  FEATURE_ENABLE_MLS?: string;
-
-  /** will enable the E2E-Identification protocol, needs active FEATURE_ENABLE_MLS to work */
-  FEATURE_ENABLE_E2EI?: string;
-
   FEATURE_USE_CORE_CRYPTO?: string;
 
   FEATURE_MLS_CONFIG_KEYING_MATERIAL_UPDATE_THRESHOLD?: string;
-
-  FEATURE_MLS_CONFIG_DEFAULT_CIPHERSUITE?: string;
 
   FEATURE_ENABLE_PROTEUS_CORE_CRYPTO?: string;
 
@@ -106,6 +99,9 @@ export type Env = {
    * or terms of use *and* privacy policy at once. Can be set to true or false. Defaults to false.
    */
   FEATURE_ENABLE_ACCOUNT_REGISTRATION_ACCEPT_TERMS_AND_PRIVACY_POLICY: string;
+
+  /** Feature toggle to blur the background during video call */
+  FEATURE_ENABLE_BLUR_BACKGROUND: string;
 
   /** Feature toggle for debug utils. Can be set to true or false */
   FEATURE_ENABLE_DEBUG: string;
@@ -136,9 +132,6 @@ export type Env = {
   /** Feature toggle for rendering youtube, vimeo, soundcloud and spotify embeds in the client */
   FEATURE_ENABLE_MEDIA_EMBEDS: string;
 
-  /** Feature toggle for the log in with phone number. Can be set to true or false */
-  FEATURE_ENABLE_PHONE_LOGIN: string;
-
   /** Feature toggle for the log in via Single Sign On. Can be set to true or false */
   FEATURE_ENABLE_SSO: string;
 
@@ -166,6 +159,33 @@ export type Env = {
   /** Feature toggle to automatically mute when accepting incoming conference calls */
   FEATURE_CONFERENCE_AUTO_MUTE: string;
 
+  /** Feature to enable in call reactions */
+  FEATURE_ENABLE_IN_CALL_REACTIONS: string;
+
+  /** Feature to enable in call hand raise */
+  FEATURE_ENABLE_IN_CALL_HAND_RAISE: string;
+
+  /** Feature to enable remove conversation locally */
+  FEATURE_ENABLE_REMOVE_GROUP_CONVERSATION: string;
+
+  /** Feature to enable calling popout window */
+  FEATURE_ENABLE_DETACHED_CALLING_WINDOW: string;
+
+  /** Feature to enable team creation flow for individual users */
+  FEATURE_ENABLE_TEAM_CREATION: string;
+
+  /** Feature to enable auto login */
+  FEATURE_ENABLE_AUTO_LOGIN: string;
+
+  /** Feature to enable rich text editor */
+  FEATURE_ENABLE_MESSAGE_FORMAT_BUTTONS: string;
+
+  /** Feature to enable Cross Platform Backup export */
+  FEATURE_ENABLE_CROSS_PLATFORM_BACKUP_EXPORT: string;
+
+  /** Feature to enable the press space to unmute feature */
+  FEATURE_ENABLE_PRESS_SPACE_TO_UNMUTE: string;
+
   /** Sets the verification ID for Google webmasters */
   GOOGLE_WEBMASTER_ID: string;
 
@@ -180,6 +200,18 @@ export type Env = {
 
   /** Sets the Countly product reporting API key */
   COUNTLY_API_KEY: string;
+
+  /** Enables logging for Countly */
+  COUNTLY_ENABLE_LOGGING: string;
+
+  /** Force Countly reporting (only to be used on internal environments) */
+  COUNTLY_FORCE_REPORTING: string;
+
+  /** Countly allow list for backend urls
+   * Multiple entries separated by comma, e.g. "https://nginz-https.anta.wire.link, https://nginz-https.diya.wire.link, https://prod-nginz-https.wire.com"
+   * Used to disable countly tracking on on-prem instances
+   */
+  COUNTLY_ALLOWED_BACKEND: string;
 
   /** Open graph header description */
   OPEN_GRAPH_DESCRIPTION: string;
@@ -220,7 +252,19 @@ export type Env = {
   /** Sets the host URL for the website, e.g. https://wire.com */
   URL_WEBSITE_BASE: string;
 
+  /** Sets paths to append to a base URL */
+  URL_PATH_CREATE_TEAM: string;
+
+  URL_PATH_MANAGE_SERVICES: string;
+
+  URL_PATH_MANAGE_TEAM: string;
+
+  URL_PATH_PASSWORD_RESET: string;
+
+  /** Sets Support URLs to specific pages */
   URL_SUPPORT_INDEX: string;
+
+  URL_SUPPORT_FOLDERS: string;
 
   URL_SUPPORT_BUG_REPORT: string;
 
@@ -248,6 +292,10 @@ export type Env = {
 
   URL_SUPPORT_SCREEN_ACCESS_DENIED: string;
 
+  URL_SUPPORT_SYSTEM_KEYCHAIN_ACCESS: string;
+
+  URL_SUPPORT_FAVORITES: string;
+
   URL_LEARN_MORE_ABOUT_GUEST_LINKS: string;
 
   URL_SUPPORT_NON_FEDERATING_INFO: string;
@@ -257,7 +305,14 @@ export type Env = {
   URL_SUPPORT_OFFLINE_BACKEND: string;
 
   URL_SUPPORT_FEDERATION_STOP: string;
+
   URL_SUPPORT_E2EI_VERIFICATION: string;
+
+  URL_SUPPORT_DECRYPT_ERROR: string;
+
+  URL_SUPPORT_PRIVACY_UNVERIFIED_USERS: string;
+
+  URL_SUPPORT_PRIVACY_WHY: string;
 
   URL_WHATS_NEW: string;
 
@@ -299,4 +354,5 @@ export type Env = {
 
   DATADOG_APPLICATION_ID?: string;
   DATADOG_CLIENT_TOKEN?: string;
+  FEATURE_DATADOG_ENVIRONMENT?: string;
 };

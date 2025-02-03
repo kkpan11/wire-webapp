@@ -106,7 +106,7 @@ describe('UserRepository', () => {
           value: {
             settings: {
               privacy: {
-                improve_wire: true,
+                telemetry_data_sharing: true,
               },
             },
             version: 1,
@@ -119,7 +119,7 @@ describe('UserRepository', () => {
           value: {
             settings: {
               privacy: {
-                improve_wire: false,
+                telemetry_data_sharing: false,
               },
             },
             version: 1,
@@ -252,7 +252,7 @@ describe('UserRepository', () => {
       beforeEach(async () => {
         [userRepository, {userState, userService}] = await buildUserRepository();
         jest.resetAllMocks();
-        jest.spyOn(userService, 'loadUserFromDb').mockResolvedValue(localUsers);
+        jest.spyOn(userService, 'loadUsersFromDb').mockResolvedValue(localUsers);
         const selfUser = new User('self');
         selfUser.isMe = true;
         userState.self(selfUser);
@@ -290,11 +290,19 @@ describe('UserRepository', () => {
         const userIds = localUsers.map(user => user.qualified_id!);
         const connections = createConnections(localUsers);
         const partialUsers = [
-          {id: userIds[0].id, availability: Availability.Type.AVAILABLE},
-          {id: userIds[1].id, availability: Availability.Type.BUSY},
+          {
+            id: userIds[0].id,
+            availability: Availability.Type.AVAILABLE,
+            qualified_id: userIds[0],
+          },
+          {
+            id: userIds[1].id,
+            availability: Availability.Type.BUSY,
+            qualified_id: userIds[1],
+          },
         ];
 
-        jest.spyOn(userRepository['userService'], 'loadUserFromDb').mockResolvedValue(partialUsers as any);
+        jest.spyOn(userRepository['userService'], 'loadUsersFromDb').mockResolvedValue(partialUsers as any);
         const fetchUserSpy = jest.spyOn(userService, 'getUsers').mockResolvedValue({found: localUsers});
 
         await userRepository.loadUsers(new User('self'), connections, [], []);
@@ -304,21 +312,6 @@ describe('UserRepository', () => {
 
         const userWithAvailability = userState.users().filter(user => user.availability() !== Availability.Type.NONE);
         expect(userWithAvailability).toHaveLength(partialUsers.length);
-      });
-
-      it('deletes users that are not needed', async () => {
-        const newUsers = [generateAPIUser(), generateAPIUser()];
-        const connections = createConnections(newUsers);
-        const removeUserSpy = jest.spyOn(userService, 'removeUserFromDb').mockResolvedValue();
-        jest.spyOn(userService, 'getUsers').mockResolvedValue({found: newUsers});
-
-        await userRepository.loadUsers(new User(), connections, [], []);
-
-        expect(userState.users()).toHaveLength(newUsers.length + 1);
-        expect(removeUserSpy).toHaveBeenCalledTimes(localUsers.length);
-        expect(removeUserSpy).toHaveBeenCalledWith(localUsers[0].qualified_id!);
-        expect(removeUserSpy).toHaveBeenCalledWith(localUsers[1].qualified_id!);
-        expect(removeUserSpy).toHaveBeenCalledWith(localUsers[2].qualified_id!);
       });
     });
 

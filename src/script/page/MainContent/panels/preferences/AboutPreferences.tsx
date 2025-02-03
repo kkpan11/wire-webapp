@@ -31,7 +31,7 @@ import {PreferencesSection} from './components/PreferencesSection';
 
 import {Config} from '../../../../Config';
 import {User} from '../../../../entity/User';
-import {getPrivacyPolicyUrl, getTermsOfUsePersonalUrl, getTermsOfUseTeamUrl, URL} from '../../../../externalRoute';
+import {externalUrl} from '../../../../externalRoute';
 
 interface AboutPreferencesProps {
   selfUser: User;
@@ -41,12 +41,14 @@ interface AboutPreferencesProps {
 const AboutPreferences: React.FC<AboutPreferencesProps> = ({selfUser, teamState = container.resolve(TeamState)}) => {
   const inTeam = teamState.isInTeam(selfUser);
   const config = Config.getConfig();
-  const websiteUrl = URL.WEBSITE;
-  const privacyPolicyUrl = getPrivacyPolicyUrl();
+
+  const websiteUrl = externalUrl.website;
+  const privacyPolicyUrl = externalUrl.privacyPolicy;
+  const desktopConfig = Config.getDesktopConfig();
 
   const termsOfUseUrl = useMemo(() => {
     if (selfUser) {
-      return inTeam ? getTermsOfUseTeamUrl() : getTermsOfUsePersonalUrl();
+      return inTeam ? externalUrl.termsOfUseTeam : externalUrl.termsOfUsePersonnal;
     }
     return '';
   }, [selfUser, inTeam]);
@@ -102,7 +104,7 @@ const AboutPreferences: React.FC<AboutPreferencesProps> = ({selfUser, teamState 
             {websiteUrl && (
               <li className="preferences-about-list-item">
                 <Link variant={LinkVariant.PRIMARY} targetBlank href={websiteUrl} data-uie-name="go-wire-dot-com">
-                  {t('preferencesAboutWebsite', config.BRAND_NAME)}
+                  {t('preferencesAboutWebsite', {brandName: config.BRAND_NAME})}
                 </Link>
               </li>
             )}
@@ -110,7 +112,13 @@ const AboutPreferences: React.FC<AboutPreferencesProps> = ({selfUser, teamState 
         </PreferencesSection>
       )}
       <PreferencesSection hasSeparator>
-        <p className="preferences-detail">{t('preferencesAboutVersion', config.VERSION)}</p>
+        {desktopConfig && (
+          <p className="preferences-detail">{t('preferencesAboutDesktopVersion', {version: desktopConfig.version})}</p>
+        )}
+        <p className="preferences-detail">
+          {t('preferencesAboutVersion', {brandName: config.BRAND_NAME, version: config.VERSION})}
+        </p>
+        <p className="preferences-detail">{t('preferencesAboutAVSVersion', {version: config.AVS_VERSION})}</p>
         <p className="preferences-detail">{t('preferencesAboutCopyright')}</p>
       </PreferencesSection>
     </PreferencesPage>

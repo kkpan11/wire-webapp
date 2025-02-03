@@ -17,30 +17,23 @@
  *
  */
 
-import {
-  CONVERSATION_TYPE,
-  ConversationProtocol,
-  MessageSendingStatus,
-  QualifiedUserClients,
-} from '@wireapp/api-client/lib/conversation';
+import {ConversationProtocol, MessageSendingStatus, QualifiedUserClients} from '@wireapp/api-client/lib/conversation';
 import {BackendErrorLabel} from '@wireapp/api-client/lib/http/';
 import {QualifiedId, RequestCancellationError} from '@wireapp/api-client/lib/user';
 import {
+  GenericMessageType,
+  InCallEmojiType,
   MessageSendingState,
   MessageTargetMode,
   ReactionType,
-  GenericMessageType,
   SendResult,
 } from '@wireapp/core/lib/conversation';
 import {
-  AudioMetaData,
   EditedTextContent,
   FileMetaDataContent,
-  ImageMetaData,
   LinkPreviewContent,
   LinkPreviewUploadedContent,
   TextContent,
-  VideoMetaData,
 } from '@wireapp/core/lib/conversation/content';
 import * as MessageBuilder from '@wireapp/core/lib/conversation/message/MessageBuilder';
 import {OtrMessage} from '@wireapp/core/lib/conversation/message/OtrMessage';
@@ -61,6 +54,7 @@ import {
 } from 'Util/LinkPreviewSender';
 import {Declension, joinNames, t} from 'Util/LocalizerUtil';
 import {getLogger, Logger} from 'Util/Logger';
+import {isMarkdownText} from 'Util/MarkdownUtil';
 import {areMentionsDifferent, isTextDifferent} from 'Util/messageComparator';
 import {roundLogarithmic} from 'Util/NumberUtil';
 import {matchQualifiedIds} from 'Util/QualifiedId';
@@ -461,7 +455,7 @@ export class MessageRepository {
     }
 
     const blob = await loadUrlBlob(url);
-    const textMessage = t('extensionsGiphyMessage', tag, {}, true);
+    const textMessage = t('extensionsGiphyMessage', {tag: tag as string | number}, {}, true);
     this.sendText({conversation: conversationEntity, message: textMessage, quote: quoteEntity});
     return this.uploadImages(conversationEntity, [blob]);
   }
@@ -494,7 +488,7 @@ export class MessageRepository {
    * @returns Can assets be uploaded
    */
   private canUploadAssetsToConversation(conversationEntity: Conversation) {
-    return !!conversationEntity && !conversationEntity.isRequest() && !conversationEntity.removed_from_conversation();
+    return !!conversationEntity && !conversationEntity.isRequest() && !conversationEntity.isSelfUserRemoved();
   }
 
   /**
@@ -513,18 +507,34 @@ export class MessageRepository {
     originalId?: string,
   ): Promise<EventRecord | void> {
     const uploadStarted = Date.now();
+    const beforeUnload = (event: Event) => {
+      event.preventDefault();
+    };
 
-    const {id, state} = await this.sendAssetMetadata(conversation, file, asImage, originalId);
-    if (state === SendAndInjectSendingState.FAILED) {
-      await this.storeFileInDb(conversation, id, file);
+    window.addEventListener('beforeunload', beforeUnload);
+    const assetMetadata = await this.createAssetMetadata(conversation, file, asImage, originalId);
+
+    if (!assetMetadata) {
+      window.removeEventListener('beforeunload', beforeUnload);
       return;
     }
-    if (state === MessageSendingState.CANCELED) {
-      // The user has canceled the upload, no need to do anything else
-      return;
-    }
+
+    const {message, metaData} = assetMetadata;
+    const {messageId} = message;
+
     try {
-      await this.sendAssetRemotedata(conversation, file, id, asImage);
+      const {state} = await this.sendAssetRemotedata(conversation, file, messageId, asImage, metaData);
+
+      if (state === SendAndInjectSendingState.FAILED) {
+        await this.storeFileInDb(conversation, messageId, file);
+        return;
+      }
+
+      if (state === MessageSendingState.CANCELED) {
+        // The user has canceled the upload, no need to do anything else
+        return;
+      }
+
       const uploadDuration = (Date.now() - uploadStarted) / TIME_IN_MILLIS.SECOND;
       this.logger.info(`Finished to upload asset for conversation'${conversation.id} in ${uploadDuration}`);
     } catch (error) {
@@ -535,9 +545,11 @@ export class MessageRepository {
         `Failed to upload asset for conversation '${conversation.id}': ${(error as Error).message}`,
         error,
       );
-      const messageEntity = await this.getMessageInConversationById(conversation, id);
+      const messageEntity = await this.getMessageInConversationById(conversation, messageId);
       await this.sendAssetUploadFailed(conversation, messageEntity.id);
       return this.updateMessageAsUploadFailed(messageEntity);
+    } finally {
+      window.removeEventListener('beforeunload', beforeUnload);
     }
   }
 
@@ -606,57 +618,77 @@ export class MessageRepository {
     return this.eventService.updateEventAsUploadFailed(message_et.primary_key, reason);
   }
 
-  private async sendAssetRemotedata(conversation: Conversation, file: Blob, messageId: string, asImage: boolean) {
-    const retention = this.assetRepository.getAssetRetention(this.userState.self(), conversation);
-    const options = {
-      expectsReadConfirmation: this.expectReadReceipt(conversation),
-      legalHoldStatus: conversation.legalHoldStatus(),
-      public: true,
-      retention,
-    };
-    const asset = await this.assetRepository.uploadFile(file, messageId, options, () =>
-      this.cancelAssetUpload(conversation, messageId),
-    );
-
-    const metadata = asImage ? ((await buildMetadata(file)) as ImageMetadata) : undefined;
-    const assetMessage = metadata
-      ? MessageBuilder.buildImageMessage({asset: asset, image: metadata}, messageId)
-      : MessageBuilder.buildFileDataMessage(
-          {asset: asset, file: {data: Buffer.from(await file.arrayBuffer())}},
-          messageId,
-        );
-    return this.sendAndInjectMessage(assetMessage, conversation, {enableEphemeral: true, syncTimestamp: false});
-  }
-
   /**
-   * Send asset metadata message to specified conversation.
+   * Create asset metadata message to specified conversation.
    */
-  private async sendAssetMetadata(
+  private async createAssetMetadata(
     conversation: Conversation,
     file: File | Blob,
     allowImageDetection?: boolean,
     originalId?: string,
   ) {
-    let metadata;
     try {
-      metadata = await buildMetadata(file);
+      const metadata = await buildMetadata(file);
+      const meta = {
+        audio: (isAudio(file) && metadata) || null,
+        video: (isVideo(file) && metadata) || null,
+        image: (allowImageDetection && isImage(file) && metadata) || null,
+        length: file.size,
+        name: (file as File).name,
+        type: file.type,
+      } as FileMetaDataContent;
+
+      const message = MessageBuilder.buildFileMetaDataMessage({metaData: meta as FileMetaDataContent}, originalId);
+      this.assetRepository.addToProcessQueue(message, conversation.id);
+      return {message, metaData: meta as FileMetaDataContent};
     } catch (error) {
       const logMessage = `Couldn't render asset preview from metadata. Asset might be corrupt: ${
         (error as Error).message
       }`;
       this.logger.warn(logMessage, error);
+      return null;
     }
-    const meta = {length: file.size, name: (file as File).name, type: file.type} as Partial<FileMetaDataContent>;
+  }
 
-    if (isAudio(file)) {
-      meta.audio = metadata as AudioMetaData;
-    } else if (isVideo(file)) {
-      meta.video = metadata as VideoMetaData;
-    } else if (allowImageDetection && isImage(file)) {
-      meta.image = metadata as ImageMetaData;
-    }
-    const message = MessageBuilder.buildFileMetaDataMessage({metaData: meta as FileMetaDataContent}, originalId);
-    return this.sendAndInjectMessage(message, conversation, {enableEphemeral: true});
+  private async sendAssetRemotedata(
+    conversation: Conversation,
+    file: Blob,
+    messageId: string,
+    asImage: boolean,
+    meta: FileMetaDataContent,
+  ) {
+    const retention = this.assetRepository.getAssetRetention(this.userState.self(), conversation);
+    const options = {
+      legalHoldStatus: conversation.legalHoldStatus(),
+      public: true,
+      retention,
+    };
+    const asset = await this.assetRepository.uploadFile(file, messageId, options);
+
+    const metadata = asImage ? ((await buildMetadata(file)) as ImageMetadata) : undefined;
+    const commonMessageData = {
+      asset: asset,
+      expectsReadConfirmation: this.expectReadReceipt(conversation),
+    };
+
+    const assetMessage = metadata
+      ? MessageBuilder.buildImageMessage(
+          {
+            ...commonMessageData,
+            image: metadata,
+          },
+          messageId,
+        )
+      : MessageBuilder.buildFileDataMessage(
+          {
+            metaData: meta,
+            ...commonMessageData,
+            file: {data: Buffer.from(await file.arrayBuffer())},
+          },
+          messageId,
+        );
+
+    return this.sendAndInjectMessage(assetMessage, conversation, {enableEphemeral: true});
   }
 
   /**
@@ -712,9 +744,11 @@ export class MessageRepository {
 
     const baseTitle =
       users.length > 1
-        ? t('modalConversationNewDeviceHeadlineMany', titleSubstitutions)
-        : t('modalConversationNewDeviceHeadlineOne', titleSubstitutions);
-    const titleString = users[0].isMe ? t('modalConversationNewDeviceHeadlineYou', titleSubstitutions) : baseTitle;
+        ? t('modalConversationNewDeviceHeadlineMany', {users: titleSubstitutions})
+        : t('modalConversationNewDeviceHeadlineOne', {user: titleSubstitutions});
+    const titleString = users[0].isMe
+      ? t('modalConversationNewDeviceHeadlineYou', {user: titleSubstitutions})
+      : baseTitle;
 
     return new Promise(resolve => {
       const options = {
@@ -816,15 +850,7 @@ export class MessageRepository {
     // Configure ephemeral messages
     conversationService.messageTimer.setConversationLevelTimer(conversation.id, conversation.messageTimer());
 
-    const isMLS = isMLSConversation(conversation);
-    const is1to1 = conversation.type() === CONVERSATION_TYPE.ONE_TO_ONE;
-
-    //Before sending a message in MLS 1:1 conversation we need to make sure that the group is established
-    if (isMLS && is1to1) {
-      await this.conversationRepositoryProvider().makeSureMLS1to1ConversationIsEstablished(conversation);
-    }
-
-    const sendOptions: Parameters<typeof conversationService.send>[0] = isMLS
+    const sendOptions: Parameters<typeof conversationService.send>[0] = isMLSConversation(conversation)
       ? {
           groupId: conversation.groupId,
           payload,
@@ -876,7 +902,7 @@ export class MessageRepository {
     reaction: string,
     userId: QualifiedId,
   ) {
-    if (conversationEntity.removed_from_conversation()) {
+    if (conversationEntity.isSelfUserRemoved()) {
       return null;
     }
     const updatedReactions = this.updateUserReactions(message_et.reactions(), userId, reaction);
@@ -1011,6 +1037,18 @@ export class MessageRepository {
     return this.sendAndInjectMessage(reaction, conversation);
   }
 
+  public async sendInCallEmoji(conversation: Conversation, emojis: InCallEmojiType) {
+    const emojisMessage = MessageBuilder.buildInCallEmojiMessage({emojis});
+
+    return this.sendAndInjectMessage(emojisMessage, conversation);
+  }
+
+  public async sendInCallHandRaised(conversation: Conversation, isHandUp: boolean) {
+    const handRaiseMessage = MessageBuilder.buildInCallHandRaiseMessage({isHandUp: isHandUp});
+
+    return this.sendAndInjectMessage(handRaiseMessage, conversation);
+  }
+
   private expectReadReceipt(conversationEntity: Conversation): boolean {
     if (conversationEntity.is1to1()) {
       return !!this.propertyRepository.receiptMode();
@@ -1128,7 +1166,7 @@ export class MessageRepository {
   }
 
   sendButtonAction(conversation: Conversation, message: CompositeMessage, buttonId: string): void {
-    if (conversation.removed_from_conversation()) {
+    if (conversation.isSelfUserRemoved()) {
       return;
     }
     const senderId = message.qualifiedFrom;
@@ -1206,14 +1244,6 @@ export class MessageRepository {
       this.createRecipients(users),
       this.onClientMismatch,
     );
-  };
-
-  /**
-   * Cancel asset upload.
-   * @param messageId Id of the message which upload has been cancelled
-   */
-  private readonly cancelAssetUpload = (conversation: Conversation, messageId: string) => {
-    this.sendAssetUploadFailed(conversation, messageId, Asset.NotUploaded.CANCELLED);
   };
 
   /**
@@ -1470,7 +1500,10 @@ export class MessageRepository {
     }
 
     const messageContentType = genericMessage.content;
+
     let actionType;
+    let isRichText: boolean | undefined = undefined;
+
     switch (messageContentType) {
       case 'asset': {
         const protoAsset = genericMessage.asset;
@@ -1509,6 +1542,9 @@ export class MessageRepository {
         if (!length) {
           actionType = 'text';
         }
+        if (protoText) {
+          isRichText = isMarkdownText(protoText.content);
+        }
         break;
       }
 
@@ -1532,7 +1568,11 @@ export class MessageRepository {
         [Segmentation.CONVERSATION.TYPE]: trackingHelpers.getConversationType(conversationEntity),
         [Segmentation.CONVERSATION.SERVICES]: roundLogarithmic(services, 6),
         [Segmentation.MESSAGE.ACTION]: actionType,
+        ...(isRichText !== undefined && {
+          [Segmentation.IS_RICH_TEXT]: isRichText,
+        }),
       };
+
       const isTeamConversation = !!conversationEntity.teamId;
       if (isTeamConversation) {
         segmentations = {

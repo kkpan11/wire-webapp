@@ -241,14 +241,14 @@ describe('ConversationMapper', () => {
       const selfStatus: Partial<SelfStatusUpdateDatabaseData> = {status: ConversationStatus.PAST_MEMBER};
       const updatedConversationEntity = ConversationMapper.updateSelfStatus(conversationEntity, selfStatus);
 
-      expect(updatedConversationEntity.removed_from_conversation()).toBeTruthy();
+      expect(updatedConversationEntity.isSelfUserRemoved()).toBeTruthy();
     });
 
     it('can update the self status if the user joins a conversation', () => {
       const selfStatus: Partial<SelfStatusUpdateDatabaseData> = {status: ConversationStatus.CURRENT_MEMBER};
       const updatedConversationEntity = ConversationMapper.updateSelfStatus(conversationEntity, selfStatus);
 
-      expect(updatedConversationEntity.removed_from_conversation()).toBeFalsy();
+      expect(updatedConversationEntity.isSelfUserRemoved()).toBeFalsy();
     });
 
     it('can update the self status with last event timestamp', () => {
@@ -694,15 +694,16 @@ describe('ConversationMapper', () => {
       expect(merged_conversation.last_server_timestamp).toBe(localData.last_event_timestamp);
     });
 
-    it('prefers local data over remote data when mapping the read receipts value', () => {
+    it('prefers remote data over remote data when mapping the read receipts value', () => {
       const localReceiptMode = 0;
-      const [localData, remoteData] = getDataWithReadReceiptMode(localReceiptMode, 1);
+      const remoteReceiptMode = 1;
+      const [localData, remoteData] = getDataWithReadReceiptMode(localReceiptMode, remoteReceiptMode);
       const [mergedConversation] = ConversationMapper.mergeConversations(
         [localData] as ConversationDatabaseData[],
         {found: [remoteData]} as RemoteConversations,
       );
 
-      expect(mergedConversation.receipt_mode).toBe(localReceiptMode);
+      expect(mergedConversation.receipt_mode).toBe(remoteReceiptMode);
     });
 
     it('uses the remote receipt mode when there is no local receipt mode', () => {

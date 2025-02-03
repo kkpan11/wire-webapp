@@ -17,11 +17,16 @@
  *
  */
 
+import {MemberLeaveReason} from '@wireapp/api-client/lib/conversation/data/';
+import {CONVERSATION_EVENT} from '@wireapp/api-client/lib/event';
+
 import {AssetTransferState} from 'src/script/assets/AssetTransferState';
 import {
   AssetAddEvent,
   DeleteEvent,
   EventBuilder,
+  GroupCreationEvent,
+  MemberLeaveEvent,
   MessageAddEvent,
   ReactionEvent,
 } from 'src/script/conversation/EventBuilder';
@@ -68,6 +73,24 @@ export function createReactionEvent(targetMessageId: string, reaction: string = 
   };
 }
 
+export function createMemberLeaveEvent(conversationId: string, userIds: string[]): MemberLeaveEvent {
+  const conversationQualifiedId = {id: conversationId, domain: ''};
+
+  return {
+    conversation: conversationId,
+    qualified_conversation: conversationQualifiedId,
+    data: {
+      qualified_user_ids: userIds.map(userId => ({id: userId, domain: ''})),
+      reason: MemberLeaveReason.USER_DELETED,
+      user_ids: userIds,
+    },
+    from: createUuid(),
+    id: createUuid(),
+    time: new Date().toISOString(),
+    type: CONVERSATION_EVENT.MEMBER_LEAVE,
+  };
+}
+
 export function createDeleteEvent(deleteMessageId: string, conversationId: string = createUuid()): DeleteEvent {
   return {
     conversation: conversationId,
@@ -98,6 +121,22 @@ export function createAssetAddEvent(overrides: Partial<AssetAddEvent> = {}): Ass
     id: createUuid(),
     time: new Date().toISOString(),
     type: CONVERSATION.ASSET_ADD,
+    ...overrides,
+  };
+}
+
+export function createGroupCreationEvent(overrides: Partial<GroupCreationEvent>): GroupCreationEvent {
+  return {
+    conversation: createUuid(),
+    data: {
+      userIds: [],
+      allTeamMembers: false,
+      name: '',
+    },
+    from: createUuid(),
+    id: createUuid(),
+    time: new Date().toISOString(),
+    type: CONVERSATION.GROUP_CREATION,
     ...overrides,
   };
 }

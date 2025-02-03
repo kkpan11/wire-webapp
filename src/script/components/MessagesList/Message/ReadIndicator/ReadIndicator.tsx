@@ -17,19 +17,17 @@
  *
  */
 
-import {Icon} from 'Components/Icon';
+import * as Icon from 'Components/Icon';
 import {useKoSubscribableChildren} from 'Util/ComponentUtil';
-import {t} from 'Util/LocalizerUtil';
 import {formatTimeShort} from 'Util/TimeUtil';
 
-import {ReadIndicatorStyles, ReadReceiptText} from './ReadIndicator.styles';
+import {ReadIndicatorContainer, ReadIndicatorStyles, ReadReceiptText} from './ReadIndicator.styles';
 
 import {Message} from '../../../../entity/message/Message';
 
 interface ReadIndicatorProps {
   message: Message;
   is1to1Conversation?: boolean;
-  isLastDeliveredMessage?: boolean;
   showIconOnly?: boolean;
   onClick?: (message: Message) => void;
 }
@@ -37,34 +35,26 @@ interface ReadIndicatorProps {
 export const ReadIndicator = ({
   message,
   is1to1Conversation = false,
-  isLastDeliveredMessage = false,
   showIconOnly = false,
   onClick,
 }: ReadIndicatorProps) => {
   const {readReceipts} = useKoSubscribableChildren(message, ['readReceipts']);
 
-  if (!message.expectsReadConfirmation) {
-    return null;
-  }
-
   if (is1to1Conversation) {
     const readReceiptText = readReceipts.length ? formatTimeShort(readReceipts[0].time) : '';
-    const showDeliveredMessage = isLastDeliveredMessage && readReceiptText === '';
 
     return (
-      <span css={ReadIndicatorStyles(showIconOnly)} data-uie-name="status-message-read-receipts">
-        {showDeliveredMessage && (
-          <span data-uie-name="status-message-read-receipt-delivered">{t('conversationMessageDelivered')}</span>
-        )}
+      <div css={ReadIndicatorContainer} className="read-indicator-wrapper">
+        <span css={ReadIndicatorStyles(showIconOnly)} data-uie-name="status-message-read-receipts">
+          {showIconOnly && readReceiptText && <Icon.ReadIcon />}
 
-        {showIconOnly && readReceiptText && <Icon.Read />}
-
-        {!showIconOnly && !!readReceiptText && (
-          <div css={ReadReceiptText} data-uie-name="status-message-read-receipt-text">
-            <Icon.Read /> {readReceiptText}
-          </div>
-        )}
-      </span>
+          {!showIconOnly && !!readReceiptText && (
+            <div css={ReadReceiptText} data-uie-name="status-message-read-receipt-text">
+              <Icon.ReadIcon /> {readReceiptText}
+            </div>
+          )}
+        </span>
+      </div>
     );
   }
 
@@ -77,21 +67,23 @@ export const ReadIndicator = ({
   if (showIconOnly) {
     return (
       <span css={ReadIndicatorStyles(true)} data-uie-name="status-message-read-receipts-header">
-        <Icon.Read />
+        <Icon.ReadIcon />
       </span>
     );
   }
 
   return (
-    <button
-      css={ReadIndicatorStyles(false)}
-      onClick={() => onClick?.(message)}
-      className="button-reset-default read-indicator"
-      data-uie-name="status-message-read-receipts"
-    >
-      <div css={ReadReceiptText} data-uie-name="status-message-read-receipt-count">
-        <Icon.Read /> {readReceiptCount}
-      </div>
-    </button>
+    <div css={ReadIndicatorContainer} className="read-indicator-wrapper">
+      <button
+        css={ReadIndicatorStyles(false)}
+        onClick={() => onClick?.(message)}
+        className="button-reset-default read-indicator"
+        data-uie-name="status-message-read-receipts"
+      >
+        <div css={ReadReceiptText} data-uie-name="status-message-read-receipt-count">
+          <Icon.ReadIcon /> {readReceiptCount}
+        </div>
+      </button>
+    </div>
   );
 };

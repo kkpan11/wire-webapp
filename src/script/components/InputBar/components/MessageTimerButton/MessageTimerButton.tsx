@@ -22,13 +22,13 @@ import React from 'react';
 import cx from 'classnames';
 import {container} from 'tsyringe';
 
-import {Icon} from 'Components/Icon';
+import * as Icon from 'Components/Icon';
 import {Conversation} from 'src/script/entity/Conversation';
 import {EphemeralTimings} from 'src/script/ephemeral/EphemeralTimings';
 import {TeamState} from 'src/script/team/TeamState';
 import {showContextMenu} from 'src/script/ui/ContextMenu';
 import {useKoSubscribableChildren} from 'Util/ComponentUtil';
-import {KEY} from 'Util/KeyboardUtil';
+import {isSpaceOrEnterKey} from 'Util/KeyboardUtil';
 import {t} from 'Util/LocalizerUtil';
 import {DurationUnit, formatDuration} from 'Util/TimeUtil';
 import {setContextMenuPosition} from 'Util/util';
@@ -74,7 +74,7 @@ const MessageTimerButton: React.FC<MessageTimerButtonProps> = ({
   // Click on ephemeral button
   const onClick = (event: React.MouseEvent<HTMLSpanElement>): void => {
     const entries = setEntries();
-    showContextMenu(event, entries, 'message-timer-menu');
+    showContextMenu({event, entries, identifier: 'message-timer-menu'});
   };
 
   if (!isSelfDeletingMessagesEnabled) {
@@ -82,17 +82,17 @@ const MessageTimerButton: React.FC<MessageTimerButtonProps> = ({
   }
 
   const handleContextKeyDown = (event: React.KeyboardEvent) => {
-    if ([KEY.SPACE, KEY.ENTER].includes(event.key)) {
+    if (isSpaceOrEnterKey(event.key)) {
       const newEvent = setContextMenuPosition(event);
       const entries = setEntries();
-      showContextMenu(newEvent, entries, 'message-timer-menu');
+      showContextMenu({event: newEvent, entries, identifier: 'message-timer-menu'});
     }
   };
 
   return (
     <button
       id="conversation-input-bar-message-timer"
-      className="controls-right-button buttons-group-button-right conversation-input-bar-message-timer"
+      className="input-bar-control conversation-input-bar-message-timer"
       onClick={isTimerDisabled ? undefined : onClick}
       onKeyDown={handleContextKeyDown}
       title={t('tooltipConversationEphemeral')}
@@ -119,7 +119,7 @@ const MessageTimerButton: React.FC<MessageTimerButtonProps> = ({
         )
       ) : (
         <span className={cx({disabled: isTimerDisabled})} css={{display: 'flex'}}>
-          <Icon.Timer data-uie-name="message-timer-icon" />
+          <Icon.TimerIcon data-uie-name="message-timer-icon" width={14} height={14} />
         </span>
       )}
     </button>

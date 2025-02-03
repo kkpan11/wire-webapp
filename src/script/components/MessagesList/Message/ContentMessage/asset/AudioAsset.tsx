@@ -23,7 +23,7 @@ import cx from 'classnames';
 import {container} from 'tsyringe';
 
 import {RestrictedAudio} from 'Components/asset/RestrictedAudio';
-import {Icon} from 'Components/Icon';
+import * as Icon from 'Components/Icon';
 import {useKoSubscribableChildren} from 'Util/ComponentUtil';
 import {getLogger} from 'Util/Logger';
 import {formatSeconds} from 'Util/TimeUtil';
@@ -59,7 +59,7 @@ export const AudioAsset: React.FC<AudioAssetProps> = ({
   isFocusable = true,
 }) => {
   const asset = message.getFirstAsset() as FileAsset;
-  const [audioElement, setAudioElement] = useEffectRef<HTMLAudioElement>();
+  const [audioElement, setAudioElement] = useEffectRef<HTMLMediaElement>();
   const {isFileSharingReceivingEnabled} = useKoSubscribableChildren(teamState, ['isFileSharingReceivingEnabled']);
   const {isObfuscated} = useKoSubscribableChildren(message, ['isObfuscated']);
   const {transferState, uploadProgress, cancelUpload, getAssetUrl} = useAssetTransfer(message);
@@ -150,7 +150,7 @@ export const AudioAsset: React.FC<AudioAssetProps> = ({
           )}
         </>
       ) : (
-        <Icon.MicOn />
+        <Icon.MicOnIcon />
       )}
     </div>
   );

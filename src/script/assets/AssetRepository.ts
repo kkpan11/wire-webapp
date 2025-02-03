@@ -22,23 +22,23 @@ import {StatusCodes as HTTP_STATUS} from 'http-status-codes';
 import ko from 'knockout';
 import {container, singleton} from 'tsyringe';
 
-import {LegalHoldStatus} from '@wireapp/protocol-messaging';
+import {GenericMessage, LegalHoldStatus} from '@wireapp/protocol-messaging';
 
 import {getLogger, Logger} from 'Util/Logger';
 import {downloadBlob, loadFileBuffer, loadImage} from 'Util/util';
 import {WebWorker} from 'Util/worker';
 
-import {decryptAesAsset} from './AssetCrypto';
 import {AssetRemoteData} from './AssetRemoteData';
-import {AssetService} from './AssetService';
 import {AssetTransferState} from './AssetTransferState';
 import {getAssetUrl, setAssetUrl} from './AssetURLCache';
+import {AssetError} from './AssetError';
 
 import {Conversation} from '../entity/Conversation';
 import {FileAsset} from '../entity/message/FileAsset';
 import type {User} from '../entity/User';
 import {Core} from '../service/CoreSingleton';
 import {TeamState} from '../team/TeamState';
+import {stripImageExifData} from '../util/ImageUtil';
 
 interface CompressedImage {
   compressedBytes: Uint8Array;
@@ -47,7 +47,6 @@ interface CompressedImage {
 
 export interface AssetUploadOptions extends AssetOptions {
   domain?: string;
-  expectsReadConfirmation: boolean;
   legalHoldStatus?: LegalHoldStatus;
 }
 
@@ -62,8 +61,9 @@ export class AssetRepository {
   readonly uploadCancelTokens: {[messageId: string]: () => void} = {};
   logger: Logger;
 
+  processQueue: ko.ObservableArray<{message: GenericMessage; conversationId: string}> = ko.observableArray();
+
   constructor(
-    private readonly assetService = container.resolve(AssetService),
     private readonly core = container.resolve(Core),
     private readonly teamState = container.resolve(TeamState),
   ) {
@@ -74,7 +74,15 @@ export class AssetRepository {
     return this.core.service!.asset;
   }
 
-  async getObjectUrl(asset: AssetRemoteData): Promise<string | undefined> {
+  public addToProcessQueue(message: GenericMessage, conversationId: string) {
+    this.processQueue.push({message, conversationId});
+  }
+
+  public removeFromProcessQueue(messageId: string) {
+    this.processQueue(this.processQueue().filter(queueItem => queueItem.message.messageId !== messageId));
+  }
+
+  async getObjectUrl(asset: AssetRemoteData): Promise<string> {
     const objectUrl = getAssetUrl(asset.identifier);
     if (objectUrl) {
       return objectUrl;
@@ -93,18 +101,11 @@ export class AssetRepository {
 
   public async load(asset: AssetRemoteData): Promise<undefined | Blob> {
     try {
-      let plaintext: ArrayBuffer;
-      const {buffer, mimeType} = await this.loadBuffer(asset);
-      const isEncryptedAsset = !!asset.otrKey && !!asset.sha256;
+      const {response, cancel} = this.loadBuffer(asset);
+      asset.cancelDownload = cancel;
+      const {buffer, mimeType} = await response;
 
-      if (isEncryptedAsset) {
-        const otrKey = asset.otrKey instanceof Uint8Array ? asset.otrKey : Uint8Array.from(Object.values(asset.otrKey));
-        const sha256 = asset.sha256 instanceof Uint8Array ? asset.sha256 : Uint8Array.from(Object.values(asset.sha256));
-        plaintext = await decryptAesAsset(buffer, otrKey.buffer, sha256.buffer);
-      } else {
-        plaintext = buffer;
-      }
-      return new Blob([new Uint8Array(plaintext)], {type: mimeType});
+      return new Blob([new Uint8Array(buffer)], {type: mimeType});
     } catch (error) {
       if (error instanceof Error) {
         const isAssetNotFound = error.message.endsWith(HTTP_STATUS.NOT_FOUND.toString());
@@ -120,37 +121,18 @@ export class AssetRepository {
     }
   }
 
-  public generateAssetUrl(asset: AssetRemoteData) {
-    switch (asset.urlData.version) {
-      case 3:
-        return this.assetService.generateAssetUrlV3(
-          asset.urlData.assetKey,
-          asset.urlData.assetToken,
-          asset.urlData.forceCaching,
-        );
-      case 2:
-        return this.assetService.generateAssetUrlV2(
-          asset.urlData.assetId,
-          asset.urlData.conversationId,
-          asset.urlData.forceCaching,
-        );
-      case 1:
-        return this.assetService.generateAssetUrl(
-          asset.urlData.assetId,
-          asset.urlData.conversationId,
-          asset.urlData.forceCaching,
-        );
-      default:
-        throw Error('Cannot map URL data.');
-    }
-  }
-
   private loadBuffer(asset: AssetRemoteData) {
-    const request = this.core.service!.asset.downloadAsset(asset.urlData, fraction => {
+    const isEncryptedAsset = !!asset.otrKey && !!asset.sha256;
+    const progressCallback = (fraction: number) => {
       asset.downloadProgress(fraction * 100);
-    });
-    asset.cancelDownload = request.cancel;
-    return request.response;
+    };
+
+    if (!isEncryptedAsset) {
+      return this.core.service!.asset.downloadRawAsset(asset.urlData, progressCallback);
+    }
+    const otrKey = asset.otrKey instanceof Uint8Array ? asset.otrKey : Uint8Array.from(Object.values(asset.otrKey));
+    const sha256 = asset.sha256 instanceof Uint8Array ? asset.sha256 : Uint8Array.from(Object.values(asset.sha256));
+    return this.core.service!.asset.downloadAsset(asset.urlData, otrKey, sha256, progressCallback);
   }
 
   public async download(asset: AssetRemoteData, fileName: string) {
@@ -176,7 +158,9 @@ export class AssetRepository {
       return downloadBlob(blob, asset.file_name);
     } catch (error) {
       if (error instanceof Error) {
-        if (error.message.endsWith('Encrypted asset does not match its SHA-256 hash')) {
+        if (error.name === AssetError.CANCEL_ERROR) {
+          asset.status(AssetTransferState.CANCELED);
+        } else if (error.message.endsWith('Encrypted asset does not match its SHA-256 hash')) {
           asset.status(AssetTransferState.DOWNLOAD_FAILED_HASH);
         } else {
           asset.status(AssetTransferState.DOWNLOAD_FAILED_DECRPYT);
@@ -190,13 +174,14 @@ export class AssetRepository {
     mediumImageKey: {domain?: string; key: string};
     previewImageKey: {domain?: string; key: string};
   }> {
+    const strippedImage = await stripImageExifData(image);
+
     const [{compressedBytes: previewImage}, {compressedBytes: mediumImage}] = await Promise.all([
-      this.compressImage(image),
-      this.compressImage(image, true),
+      this.compressImage(strippedImage),
+      this.compressImage(strippedImage, true),
     ]);
 
     const options: AssetUploadOptions = {
-      expectsReadConfirmation: false,
       public: true,
       retention: AssetRetentionPolicy.ETERNAL,
     };
@@ -262,6 +247,7 @@ export class AssetRepository {
         progressObservable(percentage);
       },
     );
+
     this.uploadCancelTokens[messageId] = () => {
       request.cancel();
       onCancel?.();
@@ -294,6 +280,7 @@ export class AssetRepository {
 
   private removeFromUploadQueue(messageId: string): void {
     this.uploadProgressQueue(this.uploadProgressQueue().filter(upload => upload.messageId !== messageId));
+    this.removeFromProcessQueue(messageId);
     delete this.uploadCancelTokens[messageId];
   }
 }

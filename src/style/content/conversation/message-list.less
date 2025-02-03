@@ -19,6 +19,7 @@
 
 // MEMBER LIST
 .message-list {
+  position: relative;
   overflow: auto;
   flex: 1 1;
 }
@@ -26,7 +27,9 @@
 .messages {
   transform: translateZ(0);
   &.flex-center {
+    flex-wrap: wrap;
     margin: auto;
+
     & .message {
       width: 100%;
       min-width: 75%;
@@ -37,6 +40,18 @@
 // MESSAGE
 .message {
   position: relative;
+  outline-offset: -0.1rem;
+
+  &.content-message {
+    &:hover,
+    &:focus-visible {
+      background-color: #fff;
+
+      body.theme-dark & {
+        background-color: var(--gray-90);
+      }
+    }
+  }
 
   & * {
     .accent-selection;
@@ -70,7 +85,7 @@
     .text-medium;
 
     .mention-at-sign {
-      font-size: @font-size-medium;
+      font-size: var(--font-size-medium);
     }
 
     &.self-mention {
@@ -85,6 +100,20 @@
   }
 }
 
+.content-message {
+  &:has(.message-header) {
+    margin-top: 6px;
+  }
+}
+
+.system-message {
+  padding-block: 8px;
+
+  &:has(.message-timestamp) + .system-message {
+    padding-top: 0;
+  }
+}
+
 @keyframes marked-animation {
   to {
     background-color: inherit;
@@ -92,14 +121,7 @@
 }
 
 .content-message-wrapper {
-  &:hover,
-  &:focus-visible {
-    background-color: #fff;
-
-    body.theme-dark & {
-      background-color: var(--gray-90);
-    }
-  }
+  padding-block: 6px;
 }
 
 .message-marked {
@@ -108,7 +130,7 @@
   }
 
   .message-body {
-    animation: @animation-timing-slower * 2 @ease-out-quart 1s forwards marked-animation;
+    animation: calc(var(--animation-timing-slower) * 2) var(--ease-out-quart) 1s forwards marked-animation;
     background-color: var(--accent-color-fade-24);
   }
 }
@@ -124,9 +146,7 @@
   position: relative;
   display: flex;
   width: 100%;
-  padding-top: 6px;
-  margin-bottom: 4px;
-  line-height: @avatar-diameter-xs;
+  line-height: var(--avatar-diameter-xs);
 
   & > .message-body-actions {
     top: 6px;
@@ -135,12 +155,17 @@
   + .message-services-warning {
     margin-left: 72px;
   }
+
+  + .message-body .message-asset {
+    padding-top: 6px;
+  }
 }
 
 .message-header-icon {
   .flex-center;
-  width: @conversation-message-sender-width;
-  max-height: @avatar-diameter-xs;
+  width: var(--conversation-message-sender-width);
+  max-height: var(--avatar-diameter-xs);
+  flex-shrink: 0;
 
   align-self: center;
   color: var(--background);
@@ -154,16 +179,35 @@
   }
 }
 
+.message-ping-delivered-icon,
+.message-header-ping .delivered-message-icon {
+  display: flex;
+  width: var(--delivered-state-width);
+  align-items: center;
+  justify-content: center;
+}
+
+.message-header-content {
+  display: flex;
+  align-items: center;
+}
+
 .message-header-label {
   display: flex;
   min-width: 0; // fixes ellipsis not working with flexbox (FF)
   align-items: center;
-  font-size: @font-size-small;
-  font-weight: @font-weight-regular;
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-regular);
   white-space: normal;
+
+  &:has(.delivered-message-icon) {
+    width: 100%;
+    justify-content: space-between;
+  }
 
   &--verification {
     display: inline;
+    flex: 1;
   }
 
   a {
@@ -171,18 +215,18 @@
   }
 
   .message-header-plain-sender-name {
-    font-weight: @font-weight-bold;
+    font-weight: var(--font-weight-bold);
   }
 
   .message-header-sender-name {
-    font-weight: @font-weight-bold;
+    font-weight: var(--font-weight-bold);
     text-transform: capitalize;
   }
 
   .system-message-caption {
     & > a {
       color: inherit;
-      font-weight: @font-weight-bold;
+      font-weight: var(--font-weight-bold);
       text-decoration: underline;
     }
   }
@@ -195,7 +239,7 @@
   &__learn-more {
     color: var(--accent-color);
     cursor: pointer;
-    font-weight: @font-weight-bold;
+    font-weight: var(--font-weight-bold);
     text-transform: uppercase;
 
     &::before {
@@ -218,7 +262,7 @@
 
 .message-header-label-icon {
   margin-left: 8px;
-  font-size: @font-size-xxs;
+  font-size: var(--font-size-xxs);
 }
 
 .message-header-icon-guest,
@@ -244,59 +288,6 @@
   height: 16px;
 }
 
-// MESSAGE - TIMESTAMP
-.message-timestamp {
-  height: 48px;
-  padding-top: 8px; // TODO margin top is not working because of collapsing margins
-  border-bottom: 1px solid @separator-color;
-  margin-bottom: 16px;
-  line-height: 2.5rem;
-  user-select: none;
-
-  .message-header-icon {
-    max-height: 40px;
-  }
-
-  .message-unread-dot {
-    .dot-md;
-    background-color: var(--accent-color);
-  }
-
-  &:not(.message-timestamp-unread) {
-    .message-unread-dot {
-      display: none;
-    }
-  }
-
-  &:not(.message-timestamp-day) {
-    border: 0;
-
-    .message-header-label {
-      border-bottom: 1px dotted @separator-color;
-    }
-  }
-
-  time[data-timestamp-type='normal'] {
-    display: block;
-  }
-  time[data-timestamp-type='day'] {
-    display: none;
-  }
-}
-
-.message-timestamp-day {
-  time[data-timestamp-type='normal'] {
-    display: none;
-  }
-  time[data-timestamp-type='day'] {
-    display: block;
-  }
-}
-
-.message-wrapper {
-  outline-offset: -0.1rem;
-}
-
 .message-mention {
   outline-offset: 0.4rem;
 }
@@ -304,20 +295,15 @@
 // MESSAGE - BODY
 .message-body {
   position: relative;
-  display: flex;
-  max-width: @conversation-max-width;
-  justify-content: space-between;
-  padding-left: @conversation-message-sender-width;
-  padding-block: 4px 8px;
+  width: 100%;
 
-  &-content {
-    width: 100%;
-    max-width: calc(@conversation-max-width - var(--conversation-message-sender-width));
-    height: fit-content;
+  .text:has(> .iframe-container) {
+    margin-right: 0;
+  }
 
-    .text:has(> .iframe-container) {
-      margin-right: 0;
-    }
+  &:not(&.message-quoted):has(.message-quote__text--full pre) {
+    display: flex;
+    flex-wrap: wrap;
   }
 
   .text {
@@ -326,17 +312,28 @@
 
     display: inline;
     min-width: 0;
-    margin-right: 12px;
-    line-height: @line-height-lg;
-    white-space: pre-wrap;
+    line-height: var(--line-height-lg);
+    white-space: normal;
     word-wrap: break-word;
+
+    li {
+      line-height: var(--line-height-lg);
+    }
 
     ul,
     ol {
-      padding-left: 32px;
+      padding-left: 24px;
       margin-top: 0;
       margin-bottom: 0;
-      line-height: 1;
+      line-height: 0.85;
+    }
+
+    ol ol {
+      list-style: lower-alpha;
+    }
+
+    ol ol ol {
+      list-style: lower-roman;
     }
   }
 
@@ -353,19 +350,48 @@
     aspect-ratio: 16 / 9;
   }
 
-  .message-ephemeral-timer {
-    position: absolute;
-    top: 2px;
-    left: 32px;
+  a:hover {
+    text-decoration: underline;
   }
+
   .md-heading {
     margin: 4px 0 8px;
-    font-size: @font-size-md;
-    font-weight: @font-weight-bold;
-    line-height: @line-height-lg;
+    font-size: var(--font-size-base);
+    font-weight: var(--font-weight-bold);
+    line-height: var(--line-height-lg);
+
+    &--1 {
+      font-size: var(--font-size-xlarge);
+    }
+
+    &--2 {
+      font-size: var(--font-size-large);
+    }
+
+    &--3 {
+      font-size: var(--font-size-base);
+    }
 
     & + br {
       display: none;
+    }
+  }
+
+  .md-blockquote {
+    position: relative;
+    padding: 0 12px 0 16px;
+    margin: 0;
+
+    &::before {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 4px;
+      height: 100%;
+      border-radius: 2px;
+      margin-right: 12px;
+      background-color: var(--message-quote-bg);
+      content: '';
     }
   }
 }
@@ -376,35 +402,30 @@
   position: absolute;
   bottom: 0;
   left: 0;
-  width: @conversation-message-sender-width;
+  width: var(--conversation-message-sender-width);
 }
 
 .image-asset {
   position: relative;
   display: flex;
-  max-width: var(--conversation-message-asset-width);
-  margin: 0 0 24px;
   cursor: pointer;
 
   &--no-image {
-    background-color: var(--foreground-fade-8);
-    cursor: default;
+    .message-asset & {
+      background-color: var(--foreground-fade-8);
+      cursor: default;
+    }
   }
 
   .image-icon svg {
     fill: white;
   }
 
-  .image-element {
-    position: relative;
-    max-width: 100%;
-    max-height: 80vh;
-
-    &.image-ephemeral {
-      cursor: default;
-      opacity: 0;
-    }
+  .image-ephemeral {
+    cursor: default;
+    opacity: 0;
   }
+
   .asset-loader {
     position: absolute;
     z-index: 1;
@@ -504,7 +525,7 @@
     pointer-events: none;
   }
 
-  @media (max-width: @screen-md-min) {
+  @media (max-width: 768px) {
     &__one-on-one {
       height: 24px;
       flex-direction: column;
@@ -517,8 +538,8 @@
 
 .message-services-warning {
   color: @w-red;
-  font-size: @font-size-small;
-  font-weight: @font-weight-regular;
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-regular);
 }
 
 // MEMBER MESSAGE
@@ -537,7 +558,7 @@
 .message-connected-header {
   padding: 0;
   margin: 0;
-  font-size: @font-size-lg;
+  font-size: var(--font-size-xlarge);
   font-weight: normal;
   line-height: 2.625rem;
   text-align: center;
@@ -560,19 +581,24 @@
   margin-top: 24px;
 }
 
+.message-details {
+  margin-left: var(--conversation-message-sender-width);
+  font-size: var(--font-size-small);
+}
+
 .message-group-creation-header,
 .message-member-footer {
   padding-top: 16px;
-  margin-left: 54px;
-  font-size: @font-size-small;
-  font-weight: @font-weight-regular;
+  margin-left: var(--conversation-message-sender-width);
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-regular);
 }
 
 .message-group-creation-header-name {
   padding: 0;
   margin: 8px 0;
-  font-size: @font-size-lg;
-  font-weight: @font-weight-bold;
+  font-size: var(--font-size-xlarge);
+  font-weight: var(--font-weight-bold);
 }
 
 .message-group-creation-header-button {
@@ -580,23 +606,23 @@
   padding: 4px 16px;
   border-radius: 4px;
   margin-top: 16px;
-  background-color: @separator-color;
+  background-color: var(--separator-color);
   cursor: pointer;
-  font-size: @font-size-medium;
-  font-weight: @font-weight-bold;
-  line-height: @line-height-sm;
+  font-size: var(--font-size-medium);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-sm);
 }
 
 .message-member-footer-message {
-  font-weight: @font-weight-regular;
-  line-height: @line-height-sm;
+  font-weight: var(--font-weight-regular);
+  line-height: var(--line-height-sm);
 }
 
 .message-member-footer-description {
   margin-top: 8px;
   color: var(--background-fade-40);
-  font-weight: @font-weight-regular;
-  line-height: @line-height-sm;
+  font-weight: var(--font-weight-regular);
+  line-height: var(--line-height-sm);
 }
 
 // PING MESSAGE
@@ -622,7 +648,7 @@
   animation-delay: 0.05s, 0.05s;
   animation-duration: 0.7s, 0.7s;
   animation-name: ping-scale-animation, ping-opacity-animation;
-  animation-timing-function: @ease-out-expo, @ease-out-quart;
+  animation-timing-function: var(--ease-out-expo), var(--ease-out-quart);
 }
 
 .ping-animation-soft {
@@ -706,7 +732,7 @@
 
 .message-header-decrypt-reset-session-action {
   height: 12px;
-  font-size: @font-size-xsmall;
+  font-size: var(--font-size-xsmall);
 }
 
 .message-header-decrypt-reset-session-spinner {
@@ -722,8 +748,9 @@
 // MESSAGE SPACING
 .message-asset {
   display: flex;
+  flex-basis: 100%;
   align-items: flex-start;
-  margin-top: 8px;
+  padding-block: 6px;
 }
 
 .message-call,
@@ -750,7 +777,7 @@
 // TODO make generic class
 .ephemeral-message-obfuscated {
   color: var(--accent-color);
-  font-family: @font-family-ephemeral;
+  font-family: var(--font-family-ephemeral);
 }
 
 .ephemeral-asset-expired {
@@ -821,7 +848,7 @@
 .system-message-caption {
   & > a {
     color: inherit;
-    font-weight: @font-weight-bold;
+    font-weight: var(--font-weight-bold);
     text-decoration: underline;
   }
 }

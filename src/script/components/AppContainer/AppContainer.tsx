@@ -24,11 +24,14 @@ import {container} from 'tsyringe';
 
 import {StyledApp, THEME_ID} from '@wireapp/react-ui-kit';
 
+import {DetachedCallingCell} from 'Components/calling/DetachedCallingCell';
 import {PrimaryModalComponent} from 'Components/Modals/PrimaryModal/PrimaryModal';
+import {QualityFeedbackModal} from 'Components/Modals/QualityFeedbackModal';
 import {SIGN_OUT_REASON} from 'src/script/auth/SignOutReason';
 import {useAppSoftLock} from 'src/script/hooks/useAppSoftLock';
 import {useSingleInstance} from 'src/script/hooks/useSingleInstance';
 import {PROPERTIES_TYPE} from 'src/script/properties/PropertiesType';
+import {isDetachedCallingFeatureEnabled} from 'Util/isDetachedCallingFeatureEnabled';
 
 import {useAccentColor} from './hooks/useAccentColor';
 import {useTheme} from './hooks/useTheme';
@@ -95,9 +98,20 @@ export const AppContainer: FC<AppProps> = ({config, clientType}) => {
           return <AppMain app={app} selfUser={selfUser} mainView={mainView} locked={softLockEnabled} />;
         }}
       </AppLoader>
+
       <StyledApp themeId={THEME_ID.DEFAULT} css={{backgroundColor: 'unset', height: '100%'}}>
         <PrimaryModalComponent />
+        <QualityFeedbackModal callingRepository={app.repository.calling} />
       </StyledApp>
+
+      {isDetachedCallingFeatureEnabled() && (
+        <DetachedCallingCell
+          propertiesRepository={app.repository.properties}
+          callingRepository={app.repository.calling}
+          mediaRepository={app.repository.media}
+          toggleScreenshare={mainView.calling.callActions.toggleScreenshare}
+        />
+      )}
     </>
   );
 };

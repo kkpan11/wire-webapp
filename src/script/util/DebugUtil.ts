@@ -27,15 +27,19 @@ import {
   CONVERSATION_EVENT,
   USER_EVENT,
 } from '@wireapp/api-client/lib/event/';
-import type {Notification} from '@wireapp/api-client/lib/notification/';
+import type {Notification, NotificationList} from '@wireapp/api-client/lib/notification/';
 import {FeatureStatus} from '@wireapp/api-client/lib/team/feature/';
 import type {QualifiedId} from '@wireapp/api-client/lib/user';
+import {NotificationSource} from '@wireapp/core/lib/notification';
 import {DatabaseKeys} from '@wireapp/core/lib/notification/NotificationDatabaseRepository';
 import Dexie from 'dexie';
 import keyboardjs from 'keyboardjs';
 import {$createTextNode, $getRoot, LexicalEditor} from 'lexical';
 import {container} from 'tsyringe';
 
+import {AvsDebugger} from '@wireapp/avs-debugger';
+
+import {getStorage} from 'Util/localStorage';
 import {getLogger, Logger} from 'Util/Logger';
 
 import {TIME_IN_MILLIS} from './TimeUtil';
@@ -43,6 +47,7 @@ import {createUuid} from './uuid';
 
 import {CallingRepository} from '../calling/CallingRepository';
 import {CallState} from '../calling/CallState';
+import {Participant} from '../calling/Participant';
 import {ClientRepository} from '../client';
 import {ClientState} from '../client/ClientState';
 import {ConnectionRepository} from '../connection/ConnectionRepository';
@@ -50,14 +55,18 @@ import {ConversationRepository} from '../conversation/ConversationRepository';
 import {isMLSCapableConversation} from '../conversation/ConversationSelectors';
 import {ConversationState} from '../conversation/ConversationState';
 import type {MessageRepository} from '../conversation/MessageRepository';
+import {E2EIHandler} from '../E2EIdentity';
 import {Conversation} from '../entity/Conversation';
 import {User} from '../entity/User';
 import {EventRepository} from '../event/EventRepository';
 import {checkVersion} from '../lifecycle/newVersionHandler';
+import {PropertiesRepository} from '../properties/PropertiesRepository';
+import {PROPERTIES_TYPE} from '../properties/PropertiesType';
 import {APIClient} from '../service/APIClientSingleton';
 import {Core} from '../service/CoreSingleton';
 import {EventRecord, StorageRepository, StorageSchemata} from '../storage';
 import {TeamState} from '../team/TeamState';
+import {disableForcedErrorReporting} from '../tracking/Telemetry.helpers';
 import {UserRepository} from '../user/UserRepository';
 import {UserState} from '../user/UserState';
 import {ViewModelRepositories} from '../view_model/MainViewModel';
@@ -70,9 +79,9 @@ export class DebugUtil {
   /** Used by QA test automation. */
   public readonly conversationRepository: ConversationRepository;
   private readonly eventRepository: EventRepository;
+  private readonly propertiesRepository: PropertiesRepository;
   private readonly storageRepository: StorageRepository;
   private readonly messageRepository: MessageRepository;
-  public readonly $: JQueryStatic;
   /** Used by QA test automation. */
   public readonly userRepository: UserRepository;
   /** Used by QA test automation. */
@@ -88,10 +97,9 @@ export class DebugUtil {
     private readonly core = container.resolve(Core),
     private readonly apiClient = container.resolve(APIClient),
   ) {
-    this.$ = $;
     this.Dexie = Dexie;
 
-    const {calling, client, connection, conversation, event, user, storage, message} = repositories;
+    const {calling, client, connection, conversation, event, user, storage, message, properties} = repositories;
     this.callingRepository = calling;
     this.clientRepository = client;
     this.conversationRepository = conversation;
@@ -100,10 +108,54 @@ export class DebugUtil {
     this.storageRepository = storage;
     this.userRepository = user;
     this.messageRepository = message;
+    this.propertiesRepository = properties;
 
     this.logger = getLogger('DebugUtil');
 
-    keyboardjs.bind('command+shift+1', this.toggleDebugUi);
+    keyboardjs.bind(['command+shift+1', 'ctrl+shift+1'], this.toggleDebugUi);
+
+    // If the debugger marked as active in the LocalStorage, install the Web Component
+    this.setupAvsDebugger();
+  }
+
+  async importEvents() {
+    try {
+      const [fileHandle] = await window.showOpenFilePicker();
+      const file = await fileHandle.getFile();
+      const data = await file.text();
+      const notificationResponse: NotificationList = JSON.parse(data);
+      const startTime = performance.now();
+
+      for (const notification of notificationResponse.notifications) {
+        const events = this.core.service.notification.handleNotification(
+          notification,
+          NotificationSource.NOTIFICATION_STREAM,
+          false,
+        );
+
+        for await (const event of events) {
+          await this.eventRepository.importEvents([event]);
+        }
+      }
+
+      const endTime = performance.now();
+      this.logger.info(
+        `Importing ${notificationResponse.notifications.length} event(s) took ${endTime - startTime} milliseconds`,
+      );
+    } catch (error) {
+      this.logger.error(`Failed to import events: ${error}`);
+    }
+  }
+
+  addCallParticipants(number: number) {
+    const call = this.callState.activeCalls()[0];
+
+    if (!call) {
+      return;
+    }
+
+    const participants = new Array(number).fill(0).map((_, i) => new Participant(new User(), `some-client-id-${i}`));
+    participants.forEach(participant => call.addParticipant(participant));
   }
 
   /** will print all the ids of entities that show on screen (userIds, conversationIds, messageIds) */
@@ -181,6 +233,10 @@ export class DebugUtil {
     );
   }
 
+  enableCameraBlur(flag: boolean) {
+    return this.callingRepository.switchVideoBackgroundBlur(flag);
+  }
+
   reconnectWebSocket({dryRun} = {dryRun: false}) {
     return this.eventRepository.connectWebSocket(this.core, () => {}, dryRun);
   }
@@ -195,6 +251,47 @@ export class DebugUtil {
     if (groupId) {
       return this.core.service?.mls?.renewKeyMaterial(groupId);
     }
+  }
+
+  async enablePressSpaceToUnmute() {
+    this.propertiesRepository.savePreference(PROPERTIES_TYPE.CALL.ENABLE_PRESS_SPACE_TO_UNMUTE, true);
+  }
+
+  async disablePressSpaceToUnmute() {
+    this.propertiesRepository.savePreference(PROPERTIES_TYPE.CALL.ENABLE_PRESS_SPACE_TO_UNMUTE, false);
+  }
+
+  setupAvsDebugger() {
+    if (this.isEnabledAvsDebugger()) {
+      this.enableAvsDebugger(true);
+    }
+  }
+
+  enableAvsDebugger(enable: boolean): boolean {
+    const storage = getStorage();
+
+    if (storage === undefined) {
+      return false;
+    }
+    if (enable) {
+      AvsDebugger.initTrackDebugger();
+    } else {
+      AvsDebugger.destructTrackDebugger();
+    }
+
+    storage.setItem('avs-debugger-enabled', `${enable}`);
+    return enable;
+  }
+
+  isEnabledAvsDebugger(): boolean {
+    const storage = getStorage();
+
+    if (storage === undefined) {
+      return false;
+    }
+
+    const isEnabled = storage.getItem('avs-debugger-enabled');
+    return isEnabled === 'true';
   }
 
   /** Used by QA test automation. */
@@ -275,8 +372,18 @@ export class DebugUtil {
     lexicalEditor.update(() => {
       const root = $getRoot().getLastChild()!;
       const textNode = $createTextNode(text);
-      root.append(textNode);
+      // the "as any" can be removed when this issue is fixed https://github.com/facebook/lexical/issues/5502
+      (root as any).append(textNode);
     });
+  }
+
+  // Used by QA to trigger a focus event on the app (in order to trigger the update of the team feature-config)
+  simulateAppToForeground() {
+    window.dispatchEvent(new FocusEvent('focus'));
+  }
+
+  setE2EICertificateTtl(ttl: number) {
+    E2EIHandler.getInstance().certificateTtl = ttl;
   }
 
   /**
@@ -401,7 +508,7 @@ export class DebugUtil {
     if (!activeCall) {
       throw new Error('no active call found');
     }
-    return this.callingRepository.getStats(activeCall.conversationId);
+    return this.callingRepository.getStats(activeCall.conversation.qualifiedId);
   }
 
   /** Used by QA test automation. */
@@ -510,5 +617,10 @@ export class DebugUtil {
       },
       EventRepository.SOURCE.WEB_SOCKET,
     );
+  }
+
+  // Used by QA test automation, allows to disable or enable the forced error reporting
+  disableForcedErrorReporting() {
+    return disableForcedErrorReporting();
   }
 }

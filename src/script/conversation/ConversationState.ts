@@ -55,6 +55,8 @@ export class ConversationState {
   public readonly visibleConversations: ko.PureComputed<Conversation[]>;
   public readonly filteredConversations: ko.PureComputed<Conversation[]>;
   public readonly archivedConversations: ko.PureComputed<Conversation[]>;
+  public readonly groupConversations: ko.PureComputed<Conversation[]>;
+  public readonly directConversations: ko.PureComputed<Conversation[]>;
   public readonly selfProteusConversation: ko.PureComputed<Conversation | undefined>;
   public readonly selfMLSConversation: ko.PureComputed<MLSConversation | undefined>;
   public readonly unreadConversations: ko.PureComputed<Conversation[]>;
@@ -100,6 +102,17 @@ export class ConversationState {
 
     this.archivedConversations = ko.pureComputed(() => {
       return this.sortedConversations().filter(conversation => conversation.is_archived());
+    });
+
+    this.groupConversations = ko.pureComputed(() => {
+      return this.sortedConversations().filter(conversation => conversation.isGroup());
+    });
+
+    this.directConversations = ko.pureComputed(() => {
+      return this.sortedConversations().filter(
+        conversation =>
+          conversation.is1to1() && (conversation.firstUserEntity()?.isAvailable() || conversation.hasContentMessages()),
+      );
     });
 
     this.filteredConversations = ko.pureComputed(() => {
@@ -214,6 +227,16 @@ export class ConversationState {
     return mlsConversation || null;
   }
 
+  has1to1ConversationWithUser(userId: QualifiedId): boolean {
+    const foundMLSConversation = this.findMLS1to1Conversation(userId);
+    if (foundMLSConversation) {
+      return true;
+    }
+
+    const foundProteusConversations = this.findProteus1to1Conversations(userId);
+    return !!foundProteusConversations && foundProteusConversations.length > 0;
+  }
+
   isSelfConversation(conversationId: QualifiedId): boolean {
     const selfConversationIds: QualifiedId[] = [this.selfProteusConversation(), this.selfMLSConversation()]
       .filter((conversation): conversation is Conversation => !!conversation)
@@ -229,7 +252,11 @@ export class ConversationState {
   /**
    * Check whether conversation is currently displayed.
    */
-  isActiveConversation(conversationEntity: Conversation): boolean {
+  isActiveConversation(conversationEntity?: Conversation): boolean {
+    if (!conversationEntity) {
+      return false;
+    }
+
     const activeConversation = this.activeConversation();
     return !!activeConversation && !!conversationEntity && matchQualifiedIds(activeConversation, conversationEntity);
   }

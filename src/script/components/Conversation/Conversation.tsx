@@ -17,7 +17,7 @@
  *
  */
 
-import {UIEvent, useCallback, useState} from 'react';
+import {UIEvent, useCallback, useEffect, useState} from 'react';
 
 import cx from 'classnames';
 import {container} from 'tsyringe';
@@ -35,8 +35,8 @@ import {showWarningModal} from 'Components/Modals/utils/showWarningModal';
 import {TitleBar} from 'Components/TitleBar';
 import {CallState} from 'src/script/calling/CallState';
 import {Config} from 'src/script/Config';
-import {CONVERSATION_READONLY_STATE} from 'src/script/conversation/ConversationRepository';
 import {useKoSubscribableChildren} from 'Util/ComponentUtil';
+import {isLastReceivedMessage} from 'Util/conversationMessages';
 import {allowsAllFiles, getFileExtensionOrName, hasAllowedExtension} from 'Util/FileTypeUtil';
 import {isHittingUploadLimit} from 'Util/isHittingUploadLimit';
 import {t} from 'Util/LocalizerUtil';
@@ -67,7 +67,6 @@ import {TeamState} from '../../team/TeamState';
 import {ElementType, MessageDetails} from '../MessagesList/Message/ContentMessage/asset/TextMessageRenderer';
 
 interface ConversationProps {
-  readonly initialMessage?: Message;
   readonly teamState: TeamState;
   selfUser: User;
   openRightSidebar: (panelState: PanelState, params: RightSidebarParams, compareEntityId?: boolean) => void;
@@ -78,7 +77,6 @@ interface ConversationProps {
 const CONFIG = Config.getConfig();
 
 export const Conversation = ({
-  initialMessage,
   teamState,
   selfUser,
   openRightSidebar,
@@ -103,29 +101,35 @@ export const Conversation = ({
     'isFileSharingSendingEnabled',
   ]);
 
-  const {
-    is1to1,
-    isRequest,
-    readOnlyState,
-    display_name: displayName,
-  } = useKoSubscribableChildren(activeConversation!, ['is1to1', 'isRequest', 'display_name', 'readOnlyState']);
-
-  const showReadOnlyConversationMessage =
-    readOnlyState !== null &&
+  const {is1to1, isRequest, isReadOnlyConversation, isSelfUserRemoved} = useKoSubscribableChildren(
+    activeConversation!,
     [
-      CONVERSATION_READONLY_STATE.READONLY_ONE_TO_ONE_OTHER_UNSUPPORTED_MLS,
-      CONVERSATION_READONLY_STATE.READONLY_ONE_TO_ONE_SELF_UNSUPPORTED_MLS,
-    ].includes(readOnlyState);
+      'is1to1',
+      'isRequest',
+      'readOnlyState',
+      'participating_user_ets',
+      'connection',
+      'isReadOnlyConversation',
+      'isSelfUserRemoved',
+    ],
+  );
 
   const inTeam = teamState.isInTeam(selfUser);
 
   const {activeCalls} = useKoSubscribableChildren(callState, ['activeCalls']);
+
   const [isMsgElementsFocusable, setMsgElementsFocusable] = useState(true);
 
   // To be changed when design chooses a breakpoint, the conditional can be integrated to the ui-kit directly
   const smBreakpoint = useMatchMedia('max-width: 640px');
 
   const {addReadReceiptToBatch} = useReadReceiptSender(repositories.message);
+
+  useEffect(() => {
+    // When the component is mounted we want to make sure its conversation entity's last message is marked as visible
+    // not to display the jump to last message button initially
+    activeConversation?.isLastMessageVisible(true);
+  }, [activeConversation]);
 
   const uploadImages = useCallback(
     (images: File[]) => {
@@ -143,7 +147,7 @@ export const Conversation = ({
 
           return showWarningModal(
             t(isGif ? 'modalGifTooLargeHeadline' : 'modalPictureTooLargeHeadline'),
-            t(isGif ? 'modalGifTooLargeMessage' : 'modalPictureTooLargeMessage', maxSize),
+            t(isGif ? 'modalGifTooLargeMessage' : 'modalPictureTooLargeMessage', {number: maxSize}),
           );
         }
       }
@@ -184,7 +188,7 @@ export const Conversation = ({
 
           if (isFileTooLarge) {
             const fileSize = formatBytes(uploadLimit);
-            showWarningModal(t('modalAssetTooLargeHeadline'), t('modalAssetTooLargeMessage', fileSize));
+            showWarningModal(t('modalAssetTooLargeHeadline'), t('modalAssetTooLargeMessage', {number: fileSize}));
 
             return;
           }
@@ -256,11 +260,7 @@ export const Conversation = ({
 
     const serviceEntity = userEntity.isService && (await repositories.integration.getServiceFromUser(userEntity));
 
-    if (serviceEntity) {
-      openRightSidebar(panelId, {entity: {...serviceEntity, id: userEntity.id}}, true);
-    } else {
-      openRightSidebar(panelId, {entity: userEntity}, true);
-    }
+    openRightSidebar(panelId, {entity: serviceEntity || userEntity}, true);
   };
 
   const showParticipants = (participants: User[]) => {
@@ -286,10 +286,6 @@ export const Conversation = ({
   };
 
   const handleMarkdownLinkClick = (event: MouseEvent | KeyboardEvent, messageDetails: MessageDetails) => {
-    if (isAuxRightClickEvent(event)) {
-      // Default browser behavior on right click
-      return true;
-    }
     const href = messageDetails.href!;
     PrimaryModal.show(PrimaryModal.type.CONFIRM, {
       primaryAction: {
@@ -297,7 +293,7 @@ export const Conversation = ({
         text: t('modalOpenLinkAction'),
       },
       text: {
-        htmlMessage: t('modalOpenLinkMessage', href, {}, true),
+        htmlMessage: t('modalOpenLinkMessage', {link: href}, {}, true),
         title: t('modalOpenLinkTitle'),
       },
     });
@@ -332,7 +328,7 @@ export const Conversation = ({
       userDomain: '',
     },
   ) => {
-    if (isMouseRightClickEvent(event)) {
+    if (isMouseRightClickEvent(event) || isAuxRightClickEvent(event)) {
       // Default browser behavior on right click
       return true;
     }
@@ -389,86 +385,82 @@ export const Conversation = ({
     }
   };
 
-  const isLastReceivedMessage = (messageEntity: Message, conversationEntity: ConversationEntity): boolean => {
-    return !!messageEntity.timestamp() && messageEntity.timestamp() >= conversationEntity.last_event_timestamp();
-  };
-
-  const updateConversationLastRead = (conversationEntity: ConversationEntity, messageEntity: Message): void => {
+  const updateConversationLastRead = (conversationEntity: ConversationEntity, messageEntity?: Message): void => {
     const conversationLastRead = conversationEntity.last_read_timestamp();
     const lastKnownTimestamp = conversationEntity.getLastKnownTimestamp(repositories.serverTime.toServerTimestamp());
     const needsUpdate = conversationLastRead < lastKnownTimestamp;
 
-    if (needsUpdate && isLastReceivedMessage(messageEntity, conversationEntity)) {
+    // if no message provided it means we need to jump to the last message
+    if (needsUpdate && (!messageEntity || isLastReceivedMessage(messageEntity, conversationEntity))) {
       conversationEntity.setTimestamp(lastKnownTimestamp, ConversationEntity.TIMESTAMP_TYPE.LAST_READ);
       repositories.message.markAsRead(conversationEntity);
     }
   };
 
-  const getInViewportCallback = (
-    conversationEntity: ConversationEntity,
-    messageEntity: Message,
-  ): (() => void) | undefined => {
-    const messageTimestamp = messageEntity.timestamp();
-    const callbacks: Function[] = [];
+  const getInViewportCallback = useCallback(
+    (conversationEntity: ConversationEntity, messageEntity: Message) => {
+      const messageTimestamp = messageEntity.timestamp();
 
-    if (!messageEntity.isEphemeral()) {
-      const isCreationMessage = messageEntity.isMember() && messageEntity.isCreation();
-      if (conversationEntity.is1to1() && isCreationMessage) {
-        repositories.integration.addProviderNameToParticipant((messageEntity as MemberMessage).otherUser());
+      const callbacks: Function[] = [];
+
+      if (!messageEntity.isEphemeral()) {
+        const isCreationMessage = messageEntity.isMember() && messageEntity.isCreation();
+        if (conversationEntity.is1to1() && isCreationMessage) {
+          repositories.integration.addProviderNameToParticipant((messageEntity as MemberMessage).otherUser());
+        }
       }
-    }
 
-    const updateLastRead = () => {
-      conversationEntity.setTimestamp(messageEntity.timestamp(), ConversationEntity.TIMESTAMP_TYPE.LAST_READ);
-    };
+      const updateLastRead = () => {
+        conversationEntity.setTimestamp(messageEntity.timestamp(), ConversationEntity.TIMESTAMP_TYPE.LAST_READ);
+      };
 
-    const startTimer = async () => {
-      if (messageEntity.conversation_id === conversationEntity.id) {
-        repositories.conversation.checkMessageTimer(messageEntity as ContentMessage);
+      const startTimer = async () => {
+        if (messageEntity.conversation_id === conversationEntity.id) {
+          repositories.conversation.checkMessageTimer(messageEntity as ContentMessage);
+        }
+      };
+
+      if (messageEntity.isEphemeral()) {
+        callbacks.push(startTimer);
       }
-    };
 
-    if (messageEntity.isEphemeral()) {
-      callbacks.push(startTimer);
-    }
+      const isUnreadMessage = messageTimestamp > conversationEntity.last_read_timestamp();
+      const isNotOwnMessage = !messageEntity.user().isMe;
 
-    const isUnreadMessage = messageTimestamp > conversationEntity.last_read_timestamp();
-    const isNotOwnMessage = !messageEntity.user().isMe;
+      let shouldSendReadReceipt = false;
 
-    let shouldSendReadReceipt = false;
-
-    if (messageEntity.expectsReadConfirmation) {
-      if (conversationEntity.is1to1()) {
-        shouldSendReadReceipt = repositories.conversation.expectReadReceipt(conversationEntity);
-      } else if (
-        conversationEntity.isGroup() &&
-        (conversationEntity.inTeam() || conversationEntity.isGuestRoom() || conversationEntity.isGuestAndServicesRoom())
-      ) {
-        shouldSendReadReceipt = true;
+      if (messageEntity.expectsReadConfirmation) {
+        if (conversationEntity.is1to1()) {
+          shouldSendReadReceipt = repositories.conversation.expectReadReceipt(conversationEntity);
+        } else if (
+          conversationEntity.isGroup() &&
+          (conversationEntity.inTeam() ||
+            conversationEntity.isGuestRoom() ||
+            conversationEntity.isGuestAndServicesRoom())
+        ) {
+          shouldSendReadReceipt = true;
+        }
       }
-    }
 
-    if (isLastReceivedMessage(messageEntity, conversationEntity)) {
-      callbacks.push(() => updateConversationLastRead(conversationEntity, messageEntity));
-    }
-
-    if (isUnreadMessage && isNotOwnMessage) {
-      callbacks.push(updateLastRead);
-      if (shouldSendReadReceipt) {
-        callbacks.push(() => addReadReceiptToBatch(conversationEntity, messageEntity));
+      if (isLastReceivedMessage(messageEntity, conversationEntity)) {
+        callbacks.push(() => updateConversationLastRead(conversationEntity, messageEntity));
       }
-    }
 
-    if (!callbacks.length) {
-      return undefined;
-    }
+      if (isUnreadMessage && isNotOwnMessage) {
+        callbacks.push(updateLastRead);
+        if (shouldSendReadReceipt) {
+          callbacks.push(() => addReadReceiptToBatch(conversationEntity, messageEntity));
+        }
+      }
 
-    return () => {
-      const trigger = () => callbacks.forEach(callback => callback());
+      return () => {
+        const trigger = () => callbacks.forEach(callback => callback());
 
-      return document.hasFocus() ? trigger() : window.addEventListener('focus', () => trigger(), {once: true});
-    };
-  };
+        return document.hasFocus() ? trigger() : window.addEventListener('focus', () => trigger(), {once: true});
+      };
+    },
+    [addReadReceiptToBatch, repositories.conversation, repositories.integration, updateConversationLastRead],
+  );
 
   return (
     <DropFileArea
@@ -488,37 +480,35 @@ export const Conversation = ({
             callActions={mainViewModel.calling.callActions}
             openRightSidebar={openRightSidebar}
             isRightSidebarOpen={isRightSidebarOpen}
-            isReadOnlyConversation={showReadOnlyConversationMessage}
+            isReadOnlyConversation={isReadOnlyConversation || isSelfUserRemoved}
           />
 
           {activeCalls.map(call => {
-            const conversation = conversationState.findConversation(call.conversationId);
+            const {conversation} = call;
             const callingViewModel = mainViewModel.calling;
             const callingRepository = callingViewModel.callingRepository;
 
-            if (!conversation || !smBreakpoint) {
+            if (!smBreakpoint) {
               return null;
             }
 
             return (
-              <div className="calling-cell" key={conversation.id}>
-                <CallingCell
-                  classifiedDomains={classifiedDomains}
-                  call={call}
-                  callActions={callingViewModel.callActions}
-                  callingRepository={callingRepository}
-                  conversation={conversation}
-                  multitasking={callingViewModel.multitasking}
-                />
-              </div>
+              <CallingCell
+                key={conversation.id}
+                classifiedDomains={classifiedDomains}
+                call={call}
+                callActions={callingViewModel.callActions}
+                callingRepository={callingRepository}
+                propertiesRepository={repositories.properties}
+              />
             );
           })}
 
           <MessagesList
             conversation={activeConversation}
             selfUser={selfUser}
-            initialMessage={initialMessage}
             conversationRepository={conversationRepository}
+            assetRepository={repositories.asset}
             messageRepository={repositories.message}
             messageActions={mainViewModel.actions}
             invitePeople={clickOnInvitePeople}
@@ -532,18 +522,16 @@ export const Conversation = ({
             onClickMessage={handleClickOnMessage}
             onLoading={loading => setIsConversationLoaded(!loading)}
             getVisibleCallback={getInViewportCallback}
-            isLastReceivedMessage={isLastReceivedMessage}
             isMsgElementsFocusable={isMsgElementsFocusable}
             setMsgElementsFocusable={setMsgElementsFocusable}
+            isRightSidebarOpen={isRightSidebarOpen}
+            updateConversationLastRead={updateConversationLastRead}
           />
 
           {isConversationLoaded &&
-            (showReadOnlyConversationMessage ? (
-              <ReadOnlyConversationMessage
-                state={readOnlyState}
-                handleMLSUpdate={reloadApp}
-                displayName={displayName}
-              />
+            !isSelfUserRemoved &&
+            (isReadOnlyConversation ? (
+              <ReadOnlyConversationMessage reloadApp={reloadApp} conversation={activeConversation} />
             ) : (
               <InputBar
                 key={activeConversation?.id}

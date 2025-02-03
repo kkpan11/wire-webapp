@@ -19,7 +19,6 @@
 
 import {ConversationProtocol} from '@wireapp/api-client/lib/conversation';
 import {FeatureList, FeatureStatus} from '@wireapp/api-client/lib/team/feature/';
-import {Permissions} from '@wireapp/api-client/lib/team/member';
 
 import {randomUUID} from 'crypto';
 
@@ -50,8 +49,9 @@ function buildConnectionRepository() {
   const userRepository = {} as UserRepository;
   const assetRepository = {} as AssetRepository;
   const teamService = new TeamService({} as any);
+  const onMemberDeleted = jest.fn();
   return [
-    new TeamRepository(userRepository, assetRepository, teamService, userState, teamState),
+    new TeamRepository(userRepository, assetRepository, onMemberDeleted, teamService, userState, teamState),
     {userState, teamState, userRepository, assetRepository, teamService},
   ] as const;
 }
@@ -71,12 +71,6 @@ describe('TeamRepository', () => {
     has_more: false,
   };
   const team_metadata = teams_data.teams[0];
-  const team_members = {
-    members: [
-      {user: randomUUID(), permissions: {copy: Permissions.DEFAULT, self: Permissions.DEFAULT}},
-      {user: randomUUID(), permissions: {copy: Permissions.DEFAULT, self: Permissions.DEFAULT}},
-    ],
-  };
 
   describe('getTeam()', () => {
     it('returns the team entity', async () => {
@@ -93,14 +87,44 @@ describe('TeamRepository', () => {
     });
   });
 
-  describe('getAllTeamMembers()', () => {
-    it('returns team member entities', async () => {
-      const [teamRepo, {teamService}] = buildConnectionRepository();
-      jest.spyOn(teamService, 'getAllTeamMembers').mockResolvedValue({hasMore: false, members: team_members.members});
-      const entities = await teamRepo['getAllTeamMembers'](team_metadata.id);
-      expect(entities.length).toEqual(team_members.members.length);
-      expect(entities[0].userId).toEqual(team_members.members[0].user);
-      expect(entities[0].permissions).toEqual(team_members.members[0].permissions);
+  describe('initTeam', () => {
+    it('updates team feature config from backend', async () => {
+      const [teamRepo, {teamService, teamState}] = buildConnectionRepository();
+      jest.spyOn(teamService, 'getTeamById').mockResolvedValue(team_metadata);
+      jest.spyOn(teamRepo, 'getSelfMember').mockResolvedValue(new TeamMemberEntity(randomUUID()));
+      jest.spyOn(teamRepo, 'emit');
+
+      const localFeatures = {
+        mls: {
+          config: {supportedProtocols: [ConversationProtocol.PROTEUS]},
+          status: FeatureStatus.ENABLED,
+        },
+      } as FeatureList;
+
+      teamState.teamFeatures(localFeatures);
+
+      const featuresFromBackend = {
+        mls: {
+          config: {supportedProtocols: [ConversationProtocol.PROTEUS, ConversationProtocol.MLS]},
+          status: FeatureStatus.ENABLED,
+        },
+      } as FeatureList;
+
+      jest.spyOn(teamService, 'getAllTeamFeatures').mockResolvedValue(featuresFromBackend);
+
+      teamRepo.on('featureConfigUpdated', update => {
+        expect(update.prevFeatureList).toEqual(localFeatures);
+        expect(update.newFeatureList).toEqual(featuresFromBackend);
+        expect(teamState.teamFeatures()).toEqual(featuresFromBackend);
+      });
+
+      await teamRepo.initTeam();
+
+      expect(teamState.teamFeatures()).toEqual(featuresFromBackend);
+      expect(teamRepo.emit).toHaveBeenCalledWith('featureConfigUpdated', {
+        prevFeatureList: localFeatures,
+        newFeatureList: featuresFromBackend,
+      });
     });
   });
 

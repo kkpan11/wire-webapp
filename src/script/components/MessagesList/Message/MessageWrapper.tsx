@@ -61,16 +61,15 @@ const isOutgoingQuote = (quoteEntity: QuoteEntity): quoteEntity is OutgoingQuote
   return quoteEntity.hash !== undefined;
 };
 
-export const MessageWrapper: React.FC<MessageParams & {hasMarker: boolean; isMessageFocused: boolean}> = ({
+export const MessageWrapper: React.FC<MessageParams> = ({
   message,
   conversation,
   selfId,
-  hasMarker,
-  isMessageFocused,
+  isFocused,
   isSelfTemporaryGuest,
   isLastDeliveredMessage,
   shouldShowInvitePeople,
-  previousMessage,
+  hideHeader,
   hasReadReceiptsTurnedOn,
   onClickAvatar,
   onClickImage,
@@ -124,11 +123,11 @@ export const MessageWrapper: React.FC<MessageParams & {hasMarker: boolean; isMes
 
     const isRestrictedFileShare = !teamState.isFileSharingReceivingEnabled();
 
-    const canDelete = message.user().isMe && !conversation.removed_from_conversation() && message.isDeletable();
+    const canDelete = message.user().isMe && !conversation.isSelfUserRemoved() && message.isDeletable();
 
-    const canEdit = message.isEditable() && !conversation.removed_from_conversation();
+    const canEdit = message.isEditable() && !conversation.isSelfUserRemoved();
 
-    const hasDetails = !conversation.is1to1() && !message.isEphemeral() && !conversation.removed_from_conversation();
+    const hasDetails = !conversation.is1to1() && !message.isEphemeral() && !conversation.isSelfUserRemoved();
 
     if (message.isDownloadable() && !isRestrictedFileShare) {
       entries.push({
@@ -187,8 +186,7 @@ export const MessageWrapper: React.FC<MessageParams & {hasMarker: boolean; isMes
         message={message}
         findMessage={findMessage}
         conversation={conversation}
-        previousMessage={previousMessage}
-        hasMarker={hasMarker}
+        hideHeader={hideHeader}
         selfId={selfId}
         isLastDeliveredMessage={isLastDeliveredMessage}
         onClickMessage={onClickMessage}
@@ -203,9 +201,10 @@ export const MessageWrapper: React.FC<MessageParams & {hasMarker: boolean; isMes
         onClickParticipants={onClickParticipants}
         onClickDetails={onClickDetails}
         onRetry={onRetry}
-        isMessageFocused={isMessageFocused}
+        isFocused={isFocused}
         isMsgElementsFocusable={isMsgElementsFocusable}
         onClickReaction={handleReactionClick}
+        is1to1={conversation.is1to1()}
       />
     );
   }
@@ -216,7 +215,7 @@ export const MessageWrapper: React.FC<MessageParams & {hasMarker: boolean; isMes
     return <LegalHoldMessage message={message} />;
   }
   if (message.isFederationStop()) {
-    return <FederationStopMessage isMessageFocused={isMessageFocused} message={message} />;
+    return <FederationStopMessage isMessageFocused={isFocused} message={message} />;
   }
   if (message.isVerification()) {
     return <VerificationMessage message={message} />;
@@ -234,7 +233,7 @@ export const MessageWrapper: React.FC<MessageParams & {hasMarker: boolean; isMes
     return <CallTimeoutMessage message={message} />;
   }
   if (message.isFailedToAddUsersMessage()) {
-    return <FailedToAddUsersMessage isMessageFocused={isMessageFocused} message={message} />;
+    return <FailedToAddUsersMessage isMessageFocused={isFocused} message={message} />;
   }
   if (message.isSystem()) {
     return <SystemMessage message={message} />;
@@ -260,6 +259,7 @@ export const MessageWrapper: React.FC<MessageParams & {hasMarker: boolean; isMes
         message={message}
         is1to1Conversation={conversation.is1to1()}
         isLastDeliveredMessage={isLastDeliveredMessage}
+        onClickDetails={onClickDetails}
       />
     );
   }

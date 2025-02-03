@@ -173,6 +173,17 @@ export class EventRepository {
   });
 
   /**
+   * Import events coming from an external source. This is only useful useful for profiling or debugging.
+   *
+   * @param events decrypted events
+   */
+  async importEvents(events: [HandledEventPayload]) {
+    for await (const event of events) {
+      await this.handleIncomingEvent(event, NotificationSource.NOTIFICATION_STREAM);
+    }
+  }
+
+  /**
    * connects to the websocket with the given account
    *
    * @param account the account to connect to
@@ -373,7 +384,7 @@ export class EventRepository {
       case EventValidation.VALID:
         let eventToProcess: IncomingEvent | undefined = event;
         if (event.type === CONVERSATION_EVENT.OTR_MESSAGE_ADD || event.type === CONVERSATION_EVENT.MLS_MESSAGE_ADD) {
-          eventToProcess = await this.mapEncryptedEvent(event, {decryptedData, decryptionError});
+          eventToProcess = await this.mapEncryptedEvent(event, {decryptedData, decryptionError}, source);
         }
         if (!eventToProcess) {
           return event;
@@ -386,24 +397,37 @@ export class EventRepository {
   private async mapEncryptedEvent(
     event: ConversationOtrMessageAddEvent | ConversationMLSMessageAddEvent,
     {decryptedData, decryptionError}: Pick<HandledEventPayload, 'decryptedData' | 'decryptionError'>,
+    source: EventSource,
   ): Promise<IncomingEvent | undefined> {
     if (decryptionError) {
-      this.logger.warn(`Decryption Error: (${decryptionError.code}) ${decryptionError.message}`, decryptionError);
+      this.logger.warn(`Decryption Error: '${event.type}'`, {
+        source,
+        eventType: event.type,
+        date: event.time,
+        code: decryptionError.code,
+        message: decryptionError.message,
+      });
+
       const ignoredCodes = [
         208, // Outated event decyption error (see https://github.com/wireapp/wire-web-core/blob/5c8c56097eadfa55e79856cd6745087f0fd12e24/packages/proteus/README.md#decryption-errors)
         209, // Duplicate event decryption error (see https://github.com/wireapp/wire-web-core/blob/5c8c56097eadfa55e79856cd6745087f0fd12e24/packages/proteus/README.md#decryption-errors)
       ];
+
       if (decryptionError.code && ignoredCodes.includes(decryptionError.code)) {
         return undefined;
       }
+
       amplify.publish(WebAppEvents.ANALYTICS.EVENT, EventName.E2EE.FAILED_MESSAGE_DECRYPTION, {
         cause: decryptionError.code,
       });
+
       return EventBuilder.buildUnableToDecrypt(event, decryptionError);
     }
+
     if (decryptedData) {
       return await new CryptographyMapper().mapGenericMessage(decryptedData, event);
     }
+
     return undefined;
   }
 
@@ -417,7 +441,7 @@ export class EventRepository {
   private async processEvent(event: IncomingEvent | ClientConversationEvent, source: EventSource) {
     try {
       for (const eventProcessMiddleware of this.eventProcessMiddlewares) {
-        event = await eventProcessMiddleware.processEvent(event);
+        event = await eventProcessMiddleware.processEvent(event, source);
       }
     } catch (error) {
       if (error instanceof EventValidationError) {

@@ -44,7 +44,15 @@
   }
 
   &__read-receipts {
-    margin: 8px 0;
+    padding: 12px 0;
+
+    .panel__info-text--margin {
+      margin-left: 56px;
+    }
+
+    .panel__action-item {
+      min-height: auto;
+    }
   }
 
   &__admin {
@@ -81,7 +89,7 @@
       margin-left: 7px;
       background: transparent;
       opacity: 0;
-      transition: opacity @animation-timing-faster @ease-in-quart;
+      transition: opacity var(--animation-timing-faster) var(--ease-in-quart);
 
       &:focus {
         opacity: 1;
@@ -128,8 +136,8 @@
   &__group-size-info {
     margin: 8px 0 0;
     color: var(--foreground);
-    font-size: @font-size-xs;
-    line-height: @line-height-sm;
+    font-size: var(--font-size-xsmall);
+    line-height: var(--line-height-sm);
   }
 
   &__bottom-actions {

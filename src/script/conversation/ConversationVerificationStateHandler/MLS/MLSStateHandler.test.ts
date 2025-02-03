@@ -26,14 +26,14 @@ import {Core} from 'src/script/service/CoreSingleton';
 import {createUuid} from 'Util/uuid';
 import {waitFor} from 'Util/waitFor';
 
-import {registerMLSConversationVerificationStateHandler} from './MLSStateHandler';
+import {MLSConversationVerificationStateHandler} from './MLSStateHandler';
 
 import {ConversationState} from '../../ConversationState';
 import {ConversationVerificationState} from '../../ConversationVerificationState';
 
 describe('MLSConversationVerificationStateHandler', () => {
   const conversationState = new ConversationState();
-  let core = new Core();
+  let core: Core;
   const groupId = 'AAEAAKA0LuGtiU7NjqqlZIE2dQUAZWxuYS53aXJlLmxpbms=';
   const conversation = new Conversation(createUuid(), '', ConversationProtocol.MLS);
   conversationState.conversations.push(conversation);
@@ -47,7 +47,14 @@ describe('MLSConversationVerificationStateHandler', () => {
   it('should do nothing if MLS service is not available', () => {
     core.service!.mls = undefined;
 
-    const t = () => registerMLSConversationVerificationStateHandler(undefined, conversationState, core);
+    const t = () =>
+      new MLSConversationVerificationStateHandler(
+        'domain',
+        () => {},
+        async () => {},
+        conversationState,
+        core,
+      );
 
     expect(t).not.toThrow();
   });
@@ -55,21 +62,71 @@ describe('MLSConversationVerificationStateHandler', () => {
   it('should do nothing if e2eIdentity service is not available', () => {
     core.service!.e2eIdentity = undefined;
 
-    registerMLSConversationVerificationStateHandler(undefined, conversationState, core);
+    new MLSConversationVerificationStateHandler(
+      'domain',
+      () => {},
+      async () => {},
+      conversationState,
+      core,
+    );
+
+    expect(core.service?.mls?.on).not.toHaveBeenCalled();
+  });
+
+  it('should do nothing if the user does not have an mls device', () => {
+    jest.spyOn(core, 'hasMLSDevice', 'get').mockReturnValue(false);
+
+    new MLSConversationVerificationStateHandler(
+      'domain',
+      () => {},
+      async () => {},
+      conversationState,
+      core,
+    );
 
     expect(core.service?.mls?.on).not.toHaveBeenCalled();
   });
 
   describe('checkConversationVerificationState', () => {
+    it('should reset to unverified if mls group does not exist anymore', async () => {
+      let triggerEpochChange: Function = () => {};
+      conversation.mlsVerificationState(ConversationVerificationState.VERIFIED);
+      jest.spyOn(core.service!.mls!, 'conversationExists').mockResolvedValueOnce(false);
+
+      jest
+        .spyOn(core.service!.mls!, 'on')
+        .mockImplementation((_event, listener) => (triggerEpochChange = listener) as any);
+
+      new MLSConversationVerificationStateHandler(
+        'domain',
+        () => {},
+        async () => {},
+        conversationState,
+        core,
+      );
+
+      triggerEpochChange({groupId});
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(conversation.mlsVerificationState()).toBe(ConversationVerificationState.UNVERIFIED);
+    });
+
     it('should degrade conversation', async () => {
       let triggerEpochChange: Function = () => {};
       conversation.mlsVerificationState(ConversationVerificationState.VERIFIED);
+      jest.spyOn(core.service!.mls!, 'conversationExists').mockResolvedValueOnce(true);
+
       jest.spyOn(e2eIdentity, 'getConversationVerificationState').mockResolvedValue(E2eiConversationState.NotVerified);
       jest
         .spyOn(core.service!.mls!, 'on')
         .mockImplementation((_event, listener) => (triggerEpochChange = listener) as any);
 
-      registerMLSConversationVerificationStateHandler(undefined, conversationState, core);
+      new MLSConversationVerificationStateHandler(
+        'domain',
+        () => {},
+        async () => {},
+        conversationState,
+        core,
+      );
 
       triggerEpochChange({groupId});
       await new Promise(resolve => setTimeout(resolve, 0));
@@ -79,12 +136,21 @@ describe('MLSConversationVerificationStateHandler', () => {
     it('should not degrade conversation if it is not verified', async () => {
       let triggerEpochChange: Function = () => {};
       conversation.mlsVerificationState(ConversationVerificationState.UNVERIFIED);
+
+      jest.spyOn(core.service!.mls!, 'conversationExists').mockResolvedValueOnce(true);
+
       jest.spyOn(e2eIdentity, 'getConversationVerificationState').mockResolvedValue(E2eiConversationState.NotVerified);
       jest
         .spyOn(core.service!.mls!, 'on')
         .mockImplementation((_event, listener) => (triggerEpochChange = listener) as any);
 
-      registerMLSConversationVerificationStateHandler(undefined, conversationState, core);
+      new MLSConversationVerificationStateHandler(
+        'domain',
+        () => {},
+        async () => {},
+        conversationState,
+        core,
+      );
 
       triggerEpochChange({groupId});
       await new Promise(resolve => setTimeout(resolve, 0));
@@ -94,12 +160,21 @@ describe('MLSConversationVerificationStateHandler', () => {
     it('should verify conversation', async () => {
       let triggerEpochChange: Function = () => {};
       conversation.mlsVerificationState(ConversationVerificationState.DEGRADED);
+
+      jest.spyOn(core.service!.mls!, 'conversationExists').mockResolvedValueOnce(true);
+
       jest.spyOn(e2eIdentity, 'getConversationVerificationState').mockResolvedValue(E2eiConversationState.Verified);
       jest
         .spyOn(core.service!.mls!, 'on')
         .mockImplementation((_event, listener) => (triggerEpochChange = listener) as any);
 
-      registerMLSConversationVerificationStateHandler(undefined, conversationState, core);
+      new MLSConversationVerificationStateHandler(
+        'domain',
+        () => {},
+        async () => {},
+        conversationState,
+        core,
+      );
 
       triggerEpochChange({groupId});
       await new Promise(resolve => setTimeout(resolve, 0));
@@ -108,6 +183,9 @@ describe('MLSConversationVerificationStateHandler', () => {
 
     it('should wait for conversation to be known', async () => {
       let triggerEpochChange: Function = () => {};
+
+      jest.spyOn(core.service!.mls!, 'conversationExists').mockResolvedValueOnce(true);
+
       const newConversation = new Conversation(createUuid(), '', ConversationProtocol.MLS);
       newConversation.groupId = 'AAEAAAOygT3TL0wljoaNabgK4yIAZWxuYS53aXJlLmxpbms=';
 
@@ -116,7 +194,13 @@ describe('MLSConversationVerificationStateHandler', () => {
         .spyOn(core.service!.mls!, 'on')
         .mockImplementation((_event, listener) => (triggerEpochChange = listener) as any);
 
-      registerMLSConversationVerificationStateHandler(undefined, conversationState, core);
+      new MLSConversationVerificationStateHandler(
+        'domain',
+        () => {},
+        async () => {},
+        conversationState,
+        core,
+      );
 
       triggerEpochChange({groupId: newConversation.groupId});
       setTimeout(() => {

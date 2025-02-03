@@ -22,7 +22,7 @@ import {FC, useMemo, useState} from 'react';
 import cx from 'classnames';
 
 import {FadingScrollbar} from 'Components/FadingScrollbar';
-import {Icon} from 'Components/Icon';
+import * as Icon from 'Components/Icon';
 import {UserList} from 'Components/UserList';
 import {useKoSubscribableChildren} from 'Util/ComponentUtil';
 import {t} from 'Util/LocalizerUtil';
@@ -121,11 +121,12 @@ const MessageDetails: FC<MessageDetailsProps> = ({
 
   const sentFooter = timestamp ? formatTime(timestamp) : '';
 
-  const receiptsTitle = t(
-    'messageDetailsTitleReceipts',
-    messageEntity?.expectsReadConfirmation ? formatUserCount(receiptUsers) : '',
-  );
-  const reactionsTitle = t('messageDetailsTitleReactions', totalNbReactions > 0 ? ` (${totalNbReactions})` : '');
+  const receiptsTitle = t('messageDetailsTitleReceipts', {
+    count: messageEntity?.expectsReadConfirmation ? formatUserCount(receiptUsers) : '',
+  });
+  const reactionsTitle = t('messageDetailsTitleReactions', {
+    count: totalNbReactions > 0 ? ` (${totalNbReactions})` : '',
+  });
 
   const panelTitle = useMemo(() => {
     if (!supportsReceipts) {
@@ -150,7 +151,7 @@ const MessageDetails: FC<MessageDetailsProps> = ({
   const onParticipantClick = (userEntity: User) => togglePanel(PanelState.GROUP_PARTICIPANT_USER, userEntity);
 
   return (
-    <div id="message-details" className="panel__page message-details">
+    <div id="message-details" className="panel__page panel__message-details">
       <PanelHeader
         onClose={onClose}
         title={panelTitle}
@@ -187,6 +188,7 @@ const MessageDetails: FC<MessageDetailsProps> = ({
               noUnderline
               conversationRepository={conversationRepository}
               onClick={onParticipantClick}
+              filterDeletedUsers={false}
             />
           </div>
         )}
@@ -201,35 +203,35 @@ const MessageDetails: FC<MessageDetailsProps> = ({
         )}
 
         {messageState === MESSAGE_STATES.NO_RECEIPTS && (
-          <div className="message-details__empty" data-uie-name="message-details-no-receipts-placeholder">
-            <Icon.Read className="message-details__empty__icon" />
-            <p className="message-details__empty__text">{t('messageDetailsNoReceipts')}</p>
+          <div className="panel__message-details__empty" data-uie-name="message-details-no-receipts-placeholder">
+            <Icon.ReadIcon className="panel__message-details__empty__icon" />
+            <p className="panel__message-details__empty__text">{t('messageDetailsNoReceipts')}</p>
           </div>
         )}
 
         {messageState === MESSAGE_STATES.NO_REACTIONS && (
-          <div className="message-details__empty" data-uie-name="message-details-no-reactions-placeholder">
-            <Icon.Like className="message-details__empty__icon" />
-            <p className="message-details__empty__text">{t('messageDetailsNoReactions')}</p>
+          <div className="panel__message-details__empty" data-uie-name="message-details-no-reactions-placeholder">
+            <Icon.LikeIcon className="panel__message-details__empty__icon" />
+            <p className="panel__message-details__empty__text">{t('messageDetailsNoReactions')}</p>
           </div>
         )}
 
         {messageState === MESSAGE_STATES.RECEIPTS_OFF && (
           <div className="message-details__empty" data-uie-name="message-details-receipts-off-placeholder">
-            <Icon.Read className="message-details__empty__icon" />
-            <p className="message-details__empty__text">{t('messageDetailsReceiptsOff')}</p>
+            <Icon.ReadIcon className="panel__message-details__empty__icon" />
+            <p className="panel__message-details__empty__text">{t('messageDetailsReceiptsOff')}</p>
           </div>
         )}
       </FadingScrollbar>
 
       <div className="panel__footer">
         <p className="panel__footer__info" data-uie-name="status-message-details-sent">
-          {t('messageDetailsSent', sentFooter)}
+          {t('messageDetailsSent', {sent: sentFooter})}
         </p>
 
         {editedFooter && (
           <p className="panel__footer__info" data-uie-name="status-message-details-edited">
-            {t('messageDetailsEdited', editedFooter)}
+            {t('messageDetailsEdited', {edited: editedFooter})}
           </p>
         )}
       </div>

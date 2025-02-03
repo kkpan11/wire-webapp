@@ -23,10 +23,7 @@ import type {
   TeamDeleteEvent,
   TeamEvent,
   TeamFeatureConfigurationUpdateEvent,
-  TeamMemberJoinEvent,
   TeamMemberLeaveEvent,
-  TeamMemberUpdateEvent,
-  TeamUpdateEvent,
 } from '@wireapp/api-client/lib/event';
 import {TEAM_EVENT} from '@wireapp/api-client/lib/event/TeamEvent';
 import {FeatureStatus, FeatureList} from '@wireapp/api-client/lib/team/feature/';
@@ -53,13 +50,14 @@ import {TeamService} from './TeamService';
 import {TeamState} from './TeamState';
 
 import {AssetRepository} from '../assets/AssetRepository';
-import {SIGN_OUT_REASON} from '../auth/SignOutReason';
 import {User} from '../entity/User';
 import {EventSource} from '../event/EventSource';
 import {NOTIFICATION_HANDLING_STATE} from '../event/NotificationHandlingState';
 import {IntegrationMapper} from '../integration/IntegrationMapper';
 import {ServiceEntity} from '../integration/ServiceEntity';
+import {scheduleRecurringTask, updateRemoteConfigLogger} from '../lifecycle/updateRemoteConfigs';
 import {MLSMigrationStatus, getMLSMigrationStatus} from '../mls/MLSMigration/migrationStatus';
+import {APIClient} from '../service/APIClientSingleton';
 import {ROLE, ROLE as TEAM_ROLE, roleFromTeamPermissions} from '../user/UserPermission';
 import {UserRepository} from '../user/UserRepository';
 import {UserState} from '../user/UserState';
@@ -75,11 +73,10 @@ export interface AccountInfo {
 }
 
 type Events = {
-  featureUpdated: {
+  featureConfigUpdated: {
     prevFeatureList?: FeatureList;
-    event: TeamFeatureConfigurationUpdateEvent;
+    newFeatureList: FeatureList;
   };
-  teamRefreshed: void;
 };
 
 export class TeamRepository extends TypedEventEmitter<Events> {
@@ -87,10 +84,12 @@ export class TeamRepository extends TypedEventEmitter<Events> {
   private readonly teamMapper: TeamMapper;
   private readonly userRepository: UserRepository;
   private readonly assetRepository: AssetRepository;
+  private backendSupportsMLS: boolean | null = null;
 
   constructor(
     userRepository: UserRepository,
     assetRepository: AssetRepository,
+    private readonly onMemberDetete: () => Promise<void>,
     readonly teamService: TeamService = new TeamService(),
     private readonly userState = container.resolve(UserState),
     private readonly teamState = container.resolve(TeamState),
@@ -120,15 +119,22 @@ export class TeamRepository extends TypedEventEmitter<Events> {
     );
   }
 
-  async initTeam(teamId?: string): Promise<{members: QualifiedId[]; features: FeatureList}> {
+  /**
+   * Will init the team configuration and all the team members from the contact list.
+   * @param teamId the Id of the team to init
+   * @param contacts all the contacts the self user has, team members will be deduced from it.
+   */
+  async initTeam(
+    teamId?: string,
+  ): Promise<{team: TeamEntity | undefined; features: FeatureList; members: QualifiedId[]}> {
     const team = await this.getTeam();
     // get the fresh feature config from backend
     const {newFeatureList} = await this.updateFeatureConfig();
     if (!teamId) {
-      return {members: [], features: {}};
+      return {team: undefined, features: {}, members: []};
     }
+    // Subscribe to team members change and update the user role and guest status
     this.teamState.teamMembers.subscribe(members => {
-      // Subscribe to team members change and update the user role and guest status
       this.userRepository.mapGuestStatus(members);
       const roles = this.teamState.memberRoles();
       members.forEach(user => {
@@ -137,15 +143,19 @@ export class TeamRepository extends TypedEventEmitter<Events> {
         }
       });
     });
-    const members = await this.loadTeamMembers(team);
-    this.scheduleTeamRefresh();
-    return {members, features: newFeatureList};
+
+    const members = await this.loadInitialTeamMembers(teamId);
+    await this.scheduleTeamRefresh();
+    return {team, features: newFeatureList, members};
   }
 
   private async updateFeatureConfig(): Promise<{newFeatureList: FeatureList; prevFeatureList?: FeatureList}> {
     const prevFeatureList = this.teamState.teamFeatures();
     const newFeatureList = await this.teamService.getAllTeamFeatures();
+
     this.teamState.teamFeatures(newFeatureList);
+
+    this.emit('featureConfigUpdated', {prevFeatureList, newFeatureList});
 
     return {
       newFeatureList,
@@ -153,17 +163,46 @@ export class TeamRepository extends TypedEventEmitter<Events> {
     };
   }
 
-  private readonly scheduleTeamRefresh = (): void => {
-    window.setInterval(async () => {
+  private readonly scheduleTeamRefresh = async (): Promise<void> => {
+    const updateTeam = async () => {
       try {
+        updateRemoteConfigLogger.info('Updating team-settings');
         await this.getTeam();
         await this.updateFeatureConfig();
-        this.emit('teamRefreshed');
       } catch (error) {
         this.logger.error(error);
       }
-    }, TIME_IN_MILLIS.SECOND * 30);
+    };
+
+    // We want to poll the latest team data every time the app is focused and every day
+    await scheduleRecurringTask({
+      every: TIME_IN_MILLIS.DAY,
+      task: updateTeam,
+      key: 'team-refresh',
+      addTaskOnWindowFocusEvent: true,
+    });
   };
+
+  private async getInitialTeamMembers(teamId: string): Promise<TeamMemberEntity[]> {
+    const {members} = await this.teamService.getAllTeamMembers(teamId);
+    return this.teamMapper.mapMembers(members);
+  }
+
+  /**
+   * will load the first 2000 team members in order to fill the initial state of the team
+   * This way a new user won't end up with an empty list of team members
+   * @param teamId
+   */
+  private async loadInitialTeamMembers(teamId: string): Promise<QualifiedId[]> {
+    const teamMembers = await this.getInitialTeamMembers(teamId);
+    this.teamState.memberRoles({});
+    this.teamState.memberInviters({});
+
+    this.updateMemberRoles(teamMembers);
+    return teamMembers
+      .filter(({userId}) => userId !== this.userState.self().id)
+      .map(memberEntity => ({domain: this.teamState.teamDomain() ?? '', id: memberEntity.userId}));
+  }
 
   async getTeam(): Promise<TeamEntity> {
     const teamId = this.userState.self().teamId;
@@ -190,14 +229,6 @@ export class TeamRepository extends TypedEventEmitter<Events> {
     return memberEntity;
   }
 
-  private async getAllTeamMembers(teamId: string): Promise<TeamMemberEntity[]> {
-    const {members, hasMore} = await this.teamService.getAllTeamMembers(teamId);
-    if (!hasMore && members.length) {
-      return this.teamMapper.mapMembers(members);
-    }
-    return [];
-  }
-
   async conversationHasGuestLinkEnabled(conversationId: string): Promise<boolean> {
     return this.teamService.conversationHasGuestLink(conversationId);
   }
@@ -211,8 +242,39 @@ export class TeamRepository extends TypedEventEmitter<Events> {
     const teamUsers = users.filter(user => user.teamId === selfTeamId);
     const newTeamMembers = teamUsers.filter(user => !knownMemberIds.includes(user.id));
     const newTeamMemberIds = newTeamMembers.map(({id}) => id);
-    await this.updateTeamMembersByIds(this.teamState.team(), newTeamMemberIds, true);
+    await this.updateTeamMembersByIds(selfTeamId, newTeamMemberIds, true);
   };
+
+  public async filterRemoteDomainUsers(users: User[]): Promise<User[]> {
+    const isMLS = this.teamState.teamFeatures()?.mls?.config.defaultProtocol === ConversationProtocol.MLS;
+
+    // IF MLS is enabled, THEN return all users
+    if (isMLS) {
+      return users;
+    }
+
+    const domain = this.userState.self()?.domain ?? this.teamState.teamDomain();
+    const hasFederatedUsers = users.some(user => user.domain !== domain);
+
+    if (this.backendSupportsMLS === null) {
+      const apiClient = container.resolve(APIClient);
+      this.backendSupportsMLS = await apiClient.supportsMLS();
+    }
+
+    // IF the backend does not support MLS, AND there are federated users, THEN return all users
+    if (!this.backendSupportsMLS && hasFederatedUsers) {
+      return users;
+    }
+
+    // IF the backend supports MLS, AND we use the proteus protocol, THEN filter out federated users
+    return users.filter(user => {
+      if (user.domain !== domain) {
+        this.logger.log(`Filtering out user ${user.id} because of domain mismatch, current protocol is not MLS`);
+        return false;
+      }
+      return true;
+    });
+  }
 
   async filterExternals(users: User[]): Promise<User[]> {
     const teamId = this.teamState.team()?.id;
@@ -251,23 +313,11 @@ export class TeamRepository extends TypedEventEmitter<Events> {
         break;
       }
       case TEAM_EVENT.DELETE: {
-        this.onDelete(eventJson);
-        break;
-      }
-      case TEAM_EVENT.MEMBER_JOIN: {
-        this._onMemberJoin(eventJson);
+        await this.onDelete(eventJson);
         break;
       }
       case TEAM_EVENT.MEMBER_LEAVE: {
-        this.onMemberLeave(eventJson);
-        break;
-      }
-      case TEAM_EVENT.MEMBER_UPDATE: {
-        await this.onMemberUpdate(eventJson);
-        break;
-      }
-      case TEAM_EVENT.UPDATE: {
-        this.onUpdate(eventJson);
+        await this.onMemberLeave(eventJson);
         break;
       }
       case TEAM_EVENT.FEATURE_CONFIG_UPDATE: {
@@ -317,18 +367,13 @@ export class TeamRepository extends TypedEventEmitter<Events> {
         accountInfo.availability = this.userState.self().availability();
       }
 
-      this.logger.log('Publishing account info', accountInfo);
+      this.logger.log('Publishing account info', {...accountInfo, picture: null});
       amplify.publish(WebAppEvents.TEAM.INFO, accountInfo);
       return accountInfo;
     }
   }
 
-  async updateTeamMembersByIds(teamEntity: TeamEntity, memberIds: string[] = [], append = false): Promise<void> {
-    const teamId = teamEntity.id;
-    if (!teamId) {
-      return;
-    }
-
+  async updateTeamMembersByIds(teamId: string, memberIds: string[] = [], append = false): Promise<void> {
     const members = await this.teamService.getTeamMembersByIds(teamId, memberIds);
     const mappedMembers = this.teamMapper.mapMembers(members);
     const selfId = this.userState.self().id;
@@ -342,28 +387,15 @@ export class TeamRepository extends TypedEventEmitter<Events> {
     this.updateMemberRoles(mappedMembers);
   }
 
-  private async loadTeamMembers(teamEntity: TeamEntity): Promise<QualifiedId[]> {
-    const teamMembers = await this.getAllTeamMembers(teamEntity.id);
-    this.teamState.memberRoles({});
-    this.teamState.memberInviters({});
-
-    this.updateMemberRoles(teamMembers);
-    return teamMembers
-      .filter(({userId}) => userId !== this.userState.self().id)
-      .map(memberEntity => ({domain: this.teamState.teamDomain() ?? '', id: memberEntity.userId}));
-  }
-
   private getTeamById(teamId: string): Promise<TeamData> {
     return this.teamService.getTeamById(teamId);
   }
 
-  private onDelete(eventJson: TeamDeleteEvent | TeamMemberLeaveEvent): void {
+  private async onDelete(eventJson: TeamDeleteEvent | TeamMemberLeaveEvent) {
     const {team: teamId} = eventJson;
     if (this.teamState.isTeam() && this.teamState.team().id === teamId) {
       this.teamState.isTeamDeleted(true);
-      window.setTimeout(() => {
-        amplify.publish(WebAppEvents.LIFECYCLE.SIGN_OUT, SIGN_OUT_REASON.ACCOUNT_DELETED, true);
-      }, 50);
+      await this.onMemberDetete();
     }
   }
 
@@ -372,21 +404,6 @@ export class TeamRepository extends TypedEventEmitter<Events> {
       data: {conv: conversationId},
     } = eventJson;
     amplify.publish(WebAppEvents.CONVERSATION.DELETE, {domain: '', id: conversationId});
-  }
-
-  private async _onMemberJoin(eventJson: TeamMemberJoinEvent) {
-    const {
-      data: {user: userId},
-      team: teamId,
-    } = eventJson;
-    const isLocalTeam = this.teamState.team().id === teamId;
-    const isOtherUser = this.userState.self().id !== userId;
-
-    if (isLocalTeam && isOtherUser) {
-      await this.userRepository.getUserById({domain: this.userState.self().domain, id: userId});
-      const member = await this.getTeamMember(teamId, userId);
-      this.updateMemberRoles([member]);
-    }
   }
 
   private readonly updateTeamConfig = async (handlingNotifications: NOTIFICATION_HANDLING_STATE): Promise<void> => {
@@ -407,11 +424,10 @@ export class TeamRepository extends TypedEventEmitter<Events> {
     }
 
     // When we receive a `feature-config.update` event, we will refetch the entire feature config
-    const {prevFeatureList} = await this.updateFeatureConfig();
-    this.emit('featureUpdated', {event, prevFeatureList});
+    await this.updateFeatureConfig();
   };
 
-  private onMemberLeave(eventJson: TeamMemberLeaveEvent): void {
+  private async onMemberLeave(eventJson: TeamMemberLeaveEvent) {
     const {
       data: {user: userId},
       team: teamId,
@@ -426,28 +442,6 @@ export class TeamRepository extends TypedEventEmitter<Events> {
       }
 
       amplify.publish(WebAppEvents.TEAM.MEMBER_LEAVE, teamId, {domain: '', id: userId}, new Date(time).toISOString());
-    }
-  }
-
-  private async onMemberUpdate(eventJson: TeamMemberUpdateEvent): Promise<void> {
-    const {
-      data: {permissions, user: userId},
-      team: teamId,
-    } = eventJson;
-    const isLocalTeam = this.teamState.team().id === teamId;
-    if (!isLocalTeam) {
-      return;
-    }
-
-    const isSelfUser = this.userState.self().id === userId;
-
-    if (isSelfUser) {
-      const memberEntity = permissions ? {permissions} : await this.getTeamMember(teamId, userId);
-      this.updateUserRole(this.userState.self(), memberEntity.permissions);
-      await this.sendAccountInfo();
-    } else {
-      const member = await this.getTeamMember(teamId, userId);
-      this.updateMemberRoles([member]);
     }
   }
 
@@ -477,15 +471,6 @@ export class TeamRepository extends TypedEventEmitter<Events> {
 
   private onUnhandled(eventJson: TeamEvent): void {
     this.logger.log(`Received '${eventJson.type}' event from backend which is not yet handled`, eventJson);
-  }
-
-  private onUpdate(eventJson: TeamUpdateEvent): void {
-    const {data: teamData, team: teamId} = eventJson;
-
-    if (this.teamState.team().id === teamId) {
-      this.teamMapper.updateTeamFromObject(teamData, this.teamState.team());
-      this.sendAccountInfo();
-    }
   }
 
   public getTeamSupportedProtocols(): ConversationProtocol[] {

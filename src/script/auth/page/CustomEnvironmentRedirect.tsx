@@ -19,28 +19,24 @@
 
 import {useEffect, useState} from 'react';
 
-import {SVGIcon} from '@wireapp/react-ui-kit/lib/Icon/SVGIcon';
-import {useIntl} from 'react-intl';
 import {connect} from 'react-redux';
 import {AnyAction, Dispatch} from 'redux';
 
 import {Runtime, UrlUtil} from '@wireapp/commons';
 import {COLOR, ContainerXS, FlexBox, Text} from '@wireapp/react-ui-kit';
 
+import {LogoIcon} from 'Components/Icon';
+import {t} from 'Util/LocalizerUtil';
 import {afterRender} from 'Util/util';
 
 import {Page} from './Page';
 
-import {customEnvRedirectStrings} from '../../strings';
 import {actionRoot} from '../module/action';
 import {bindActionCreators} from '../module/reducer';
 import {QUERY_KEY} from '../route';
-import {getSVG} from '../util/SVGProvider';
 
 const REDIRECT_DELAY = 5000;
 const CustomEnvironmentRedirectComponent = ({doNavigate, doSendNavigationEvent}: DispatchProps) => {
-  const {formatMessage: _} = useIntl();
-
   const [destinationUrl, setDestinationUrl] = useState<string | null>(null);
   const [isAnimating, setIsAnimating] = useState(false);
 
@@ -87,9 +83,7 @@ const CustomEnvironmentRedirectComponent = ({doNavigate, doSendNavigationEvent}:
               width: 120,
             }}
           >
-            <SVGIcon aria-hidden="true" color={COLOR.WHITE} realWidth={47} realHeight={38}>
-              <g dangerouslySetInnerHTML={{__html: getSVG('logo-icon')?.documentElement?.innerHTML}} />
-            </SVGIcon>
+            <LogoIcon aria-hidden="true" color={COLOR.WHITE} width={47} height={38} />
             <svg
               aria-hidden="true"
               style={{position: 'absolute'}}
@@ -120,13 +114,13 @@ const CustomEnvironmentRedirectComponent = ({doNavigate, doSendNavigationEvent}:
         </FlexBox>
         <ContainerXS centerText style={{marginTop: 48}}>
           <Text block bold fontSize={'24px'} center style={{marginBottom: 16, marginTop: 0}}>
-            {_(customEnvRedirectStrings.redirectHeadline)}
+            {t('customEnvRedirect.redirectHeadline')}
           </Text>
           <Text block center>
-            {_(customEnvRedirectStrings.redirectTo)}
+            {t('customEnvRedirect.redirectTo')}
           </Text>
           <Text block center fontSize="16px" bold style={{marginTop: '16px'}} data-uie-name="credentials-info">
-            {_(customEnvRedirectStrings.credentialsInfo)}
+            {t('customEnvRedirect.credentialsInfo')}
           </Text>
         </ContainerXS>
       </FlexBox>

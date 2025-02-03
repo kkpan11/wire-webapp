@@ -17,46 +17,56 @@
  *
  */
 
-import React, {useEffect} from 'react';
+import React, {useEffect, useState} from 'react';
 
+import {DefaultConversationRoleName} from '@wireapp/api-client/lib/conversation/';
 import {TabIndex} from '@wireapp/react-ui-kit/lib/types/enums';
+import cx from 'classnames';
 import {container} from 'tsyringe';
 
-import {CALL_TYPE} from '@wireapp/avs';
-import {IconButton, IconButtonVariant, Select, useMatchMedia} from '@wireapp/react-ui-kit';
+import {Checkbox, CheckboxLabel, IconButton, IconButtonVariant, QUERY} from '@wireapp/react-ui-kit';
+import {WebAppEvents} from '@wireapp/webapp-events';
 
+import {useAppNotification} from 'Components/AppNotification/AppNotification';
 import {useCallAlertState} from 'Components/calling/useCallAlertState';
-import {Icon} from 'Components/Icon';
-import {ConversationClassifiedBar} from 'Components/input/ClassifiedBar';
-import {isMediaDevice} from 'src/script/guards/MediaDevice';
-import {MediaDeviceType} from 'src/script/media/MediaDeviceType';
+import {ConversationClassifiedBar} from 'Components/ClassifiedBar/ClassifiedBar';
+import * as Icon from 'Components/Icon';
+import {ModalComponent} from 'Components/Modals/ModalComponent';
+import {CallingRepository} from 'src/script/calling/CallingRepository';
+import {useActiveWindowMatchMedia} from 'src/script/hooks/useActiveWindowMatchMedia';
+import {useToggleState} from 'src/script/hooks/useToggleState';
+import {PropertiesRepository} from 'src/script/properties/PropertiesRepository';
+import {CallViewTab} from 'src/script/view_model/CallingViewModel';
 import {useKoSubscribableChildren} from 'Util/ComponentUtil';
-import {handleKeyDown, isEscapeKey} from 'Util/KeyboardUtil';
+import {isDetachedCallingFeatureEnabled} from 'Util/isDetachedCallingFeatureEnabled';
+import {handleKeyDown, KEY} from 'Util/KeyboardUtil';
 import {t} from 'Util/LocalizerUtil';
 import {preventFocusOutside} from 'Util/util';
 
-import {ButtonGroup} from './ButtonGroup';
+import {CallingParticipantList} from './CallingCell/CallIngParticipantList';
 import {Duration} from './Duration';
 import {
-  videoControlActiveStyles,
-  videoControlInActiveStyles,
-  videoControlDisabledStyles,
-  paginationButtonStyles,
   classifiedBarStyles,
+  headerActionsWrapperStyles,
+  paginationWrapperStyles,
+  videoTopBarStyles,
+  minimizeButtonStyles,
+  openDetachedWindowButtonStyles,
+  paginationStyles,
 } from './FullscreenVideoCall.styles';
 import {GroupVideoGrid} from './GroupVideoGrid';
-import {Pagination} from './Pagination';
+import {Pagination} from './Pagination/Pagination';
+import {VideoControls} from './VideoControls/VideoControls';
 
 import type {Call} from '../../calling/Call';
-import {MuteState} from '../../calling/CallState';
-import type {Participant} from '../../calling/Participant';
+import {CallingViewMode, CallState, MuteState} from '../../calling/CallState';
+import {Participant} from '../../calling/Participant';
 import type {Grid} from '../../calling/videoGridHandler';
 import type {Conversation} from '../../entity/Conversation';
-import {ElectronDesktopCapturerSource, MediaDevicesHandler} from '../../media/MediaDevicesHandler';
-import type {Multitasking} from '../../notification/NotificationRepository';
-import {useAppState} from '../../page/useAppState';
+import {MediaDevicesHandler} from '../../media/MediaDevicesHandler';
 import {TeamState} from '../../team/TeamState';
-import {CallViewTab, CallViewTabs} from '../../view_model/CallingViewModel';
+import {useWarningsState} from '../../view_model/WarningsContainer/WarningsState';
+import {CONFIG, TYPE} from '../../view_model/WarningsContainer/WarningsTypes';
 
 export interface FullscreenVideoCallProps {
   activeCallViewTab: string;
@@ -68,36 +78,46 @@ export interface FullscreenVideoCallProps {
   isMuted: boolean;
   leave: (call: Call) => void;
   maximizedParticipant: Participant | null;
+  propertiesRepository: PropertiesRepository;
+  callingRepository: CallingRepository;
   mediaDevicesHandler: MediaDevicesHandler;
-  multitasking: Multitasking;
   muteState: MuteState;
-  setActiveCallViewTab: (tab: string) => void;
+  setActiveCallViewTab: (tab: CallViewTab) => void;
   setMaximizedParticipant: (call: Call, participant: Participant | null) => void;
   switchCameraInput: (deviceId: string) => void;
   switchMicrophoneInput: (deviceId: string) => void;
   switchSpeakerOutput: (deviceId: string) => void;
+  switchBlurredBackground: (status: boolean) => void;
   teamState?: TeamState;
+  callState?: CallState;
   toggleCamera: (call: Call) => void;
   toggleMute: (call: Call, muteState: boolean) => void;
   toggleScreenshare: (call: Call) => void;
+  sendEmoji: (emoji: string, call: Call) => void;
+  sendHandRaised: (isHandUp: boolean, call: Call) => void;
   videoGrid: Grid;
 }
 
-const FullscreenVideoCall: React.FC<FullscreenVideoCallProps> = ({
+const LOCAL_STORAGE_KEY_FOR_SCREEN_SHARING_CONFIRM_MODAL = 'DO_NOT_ASK_AGAIN_FOR_SCREEN_SHARING_CONFIRM_MODAL';
+
+const FullscreenVideoCall = ({
   call,
   canShareScreen,
   conversation,
   isChoosingScreen,
+  sendEmoji,
   isMuted,
   muteState,
   mediaDevicesHandler,
-  multitasking,
+  propertiesRepository,
+  callingRepository,
   videoGrid,
   maximizedParticipant,
   activeCallViewTab,
   switchCameraInput,
   switchMicrophoneInput,
   switchSpeakerOutput,
+  switchBlurredBackground,
   setMaximizedParticipant,
   setActiveCallViewTab,
   toggleMute,
@@ -105,13 +125,20 @@ const FullscreenVideoCall: React.FC<FullscreenVideoCallProps> = ({
   toggleScreenshare,
   leave,
   changePage,
+  sendHandRaised,
   teamState = container.resolve(TeamState),
-}) => {
+  callState = container.resolve(CallState),
+}: FullscreenVideoCallProps) => {
+  const [isConfirmCloseModalOpen, setIsConfirmCloseModalOpen] = useState<boolean>(false);
   const selfParticipant = call.getSelfParticipant();
-  const {sharesScreen: selfSharesScreen, sharesCamera: selfSharesCamera} = useKoSubscribableChildren(selfParticipant, [
-    'sharesScreen',
-    'sharesCamera',
-  ]);
+  const {sharesCamera: selfSharesCamera} = useKoSubscribableChildren(selfParticipant, ['sharesCamera']);
+
+  // Warnings banner
+  const warnings = useWarningsState(state => state.warnings);
+  const visibleWarning = warnings[warnings.length - 1];
+  const isConnectivityRecovery = visibleWarning === TYPE.CONNECTIVITY_RECOVERY;
+  const hasOffset = warnings.length > 0 && !isConnectivityRecovery;
+  const isMiniMode = CONFIG.MINI_MODES.includes(visibleWarning);
 
   const {
     activeSpeakers,
@@ -119,149 +146,85 @@ const FullscreenVideoCall: React.FC<FullscreenVideoCallProps> = ({
     pages: callPages,
     startedAt,
     participants,
-  } = useKoSubscribableChildren(call, ['activeSpeakers', 'currentPage', 'pages', 'startedAt', 'participants']);
+    handRaisedParticipants,
+  } = useKoSubscribableChildren(call, [
+    'activeSpeakers',
+    'currentPage',
+    'pages',
+    'startedAt',
+    'participants',
+    'handRaisedParticipants',
+  ]);
   const {display_name: conversationName} = useKoSubscribableChildren(conversation, ['display_name']);
-  const {isVideoCallingEnabled, classifiedDomains} = useKoSubscribableChildren(teamState, [
-    'isVideoCallingEnabled',
-    'classifiedDomains',
-  ]);
+  const {classifiedDomains} = useKoSubscribableChildren(teamState, ['classifiedDomains']);
 
-  const {
-    [MediaDeviceType.VIDEO_INPUT]: currentCameraDevice,
-    [MediaDeviceType.AUDIO_INPUT]: currentMicrophoneDevice,
-    [MediaDeviceType.AUDIO_OUTPUT]: currentSpeakerDevice,
-  } = useKoSubscribableChildren(mediaDevicesHandler.currentDeviceId, [
-    MediaDeviceType.VIDEO_INPUT,
-    MediaDeviceType.AUDIO_INPUT,
-    MediaDeviceType.AUDIO_OUTPUT,
-  ]);
-
-  const {videoinput, audioinput, audiooutput} = useKoSubscribableChildren(mediaDevicesHandler.availableDevices, [
-    MediaDeviceType.VIDEO_INPUT,
-    MediaDeviceType.AUDIO_INPUT,
-    MediaDeviceType.AUDIO_OUTPUT,
-  ]);
-  const [audioOptionsOpen, setAudioOptionsOpen] = React.useState(false);
-  const [videoOptionsOpen, setVideoOptionsOpen] = React.useState(false);
-  const minimize = () => multitasking.isMinimized(true);
-
-  const showToggleVideo =
-    isVideoCallingEnabled &&
-    (call.initialType === CALL_TYPE.VIDEO || conversation.supportsVideoCall(call.isConference));
-
-  const showSwitchMicrophone = audioinput.length > 1;
-  const showSwitchVideo = videoinput.length > 1;
-
-  const audioOptions = [
-    {
-      label: t('videoCallaudioInputMicrophone'),
-      options: audioinput.map((device: MediaDeviceInfo | ElectronDesktopCapturerSource) => {
-        return isMediaDevice(device)
-          ? {
-              label: device.label,
-              value: `${device.deviceId}-input`,
-              dataUieName: `${device.deviceId}-input`,
-              id: device.deviceId,
-            }
-          : {
-              label: device.name,
-              value: `${device.id}-input`,
-              dataUieName: `${device.id}-input`,
-              id: device.id,
-            };
-      }),
-    },
-    {
-      label: t('videoCallaudioOutputSpeaker'),
-      options: audiooutput.map((device: MediaDeviceInfo | ElectronDesktopCapturerSource) => {
-        return isMediaDevice(device)
-          ? {
-              label: device.label,
-              value: `${device.deviceId}-output`,
-              dataUieName: `${device.deviceId}-output`,
-              id: device.deviceId,
-            }
-          : {
-              label: device.name,
-              value: `${device.id}-output`,
-              dataUieName: `${device.id}-output`,
-              id: device.id,
-            };
-      }),
-    },
-  ];
-  const [selectedAudioOptions, setSelectedAudioOptions] = React.useState(() =>
-    [currentMicrophoneDevice, currentSpeakerDevice].flatMap(
-      (device, index) => audioOptions[index].options.find(item => item.id === device) ?? audioOptions[index].options[0],
-    ),
+  const {selfUser, roles} = useKoSubscribableChildren(conversation, ['selfUser', 'roles']);
+  const {emojis, viewMode, detachedWindow, isScreenSharingSourceFromDetachedWindow} = useKoSubscribableChildren(
+    callState,
+    ['emojis', 'viewMode', 'detachedWindow', 'isScreenSharingSourceFromDetachedWindow'],
   );
-  const updateAudioOptions = (selectedOption: string, input: boolean) => {
-    const microphone = input
-      ? audioOptions[0].options.find(item => item.value === selectedOption) ?? selectedAudioOptions[0]
-      : selectedAudioOptions[0];
-    const speaker = !input
-      ? audioOptions[1].options.find(item => item.value === selectedOption) ?? selectedAudioOptions[1]
-      : selectedAudioOptions[1];
 
-    setSelectedAudioOptions([microphone, speaker]);
-    switchMicrophoneInput(microphone.id);
-    switchSpeakerOutput(speaker.id);
+  const minimize = () => {
+    const isSharingScreen = call?.getSelfParticipant().sharesScreen();
+
+    const hasAlreadyConfirmed = localStorage.getItem(LOCAL_STORAGE_KEY_FOR_SCREEN_SHARING_CONFIRM_MODAL) === 'true';
+
+    if (isSharingScreen && isScreenSharingSourceFromDetachedWindow && !hasAlreadyConfirmed) {
+      setIsConfirmCloseModalOpen(true);
+      return;
+    }
+
+    callingRepository.setViewModeMinimized();
   };
+  const openPopup = () => callingRepository.setViewModeDetached();
 
-  const videoOptions = [
-    {
-      label: t('videoCallvideoInputCamera'),
-      options: videoinput.map((device: MediaDeviceInfo | ElectronDesktopCapturerSource) => {
-        return isMediaDevice(device)
-          ? {
-              label: device.label,
-              value: device.deviceId,
-              dataUieName: device.deviceId,
-              id: device.deviceId,
-            }
-          : {
-              label: device.name,
-              value: device.id,
-              dataUieName: device.id,
-              id: device.id,
-            };
-      }),
-    },
-  ];
+  const [isParticipantsListOpen, toggleParticipantsList] = useToggleState(false);
 
-  const [selectedVideoOptions, setSelectedVideoOptions] = React.useState(() =>
-    [currentCameraDevice].flatMap(
-      device => videoOptions.flatMap(options => options.options.filter(item => item.id === device)) ?? [],
-    ),
-  );
-  const updateVideoOptions = (selectedOption: string) => {
-    const camera = videoOptions[0].options.find(item => item.value === selectedOption) ?? selectedVideoOptions[0];
-    setSelectedVideoOptions([camera]);
-    switchCameraInput(camera.id);
-  };
+  const handRaisedNotification = useAppNotification({
+    activeWindow: viewMode === CallingViewMode.DETACHED_WINDOW ? detachedWindow! : window,
+  });
 
-  const unreadMessagesCount = useAppState(state => state.unreadMessagesCount);
-  const hasUnreadMessages = unreadMessagesCount > 0;
+  useEffect(() => {
+    const handRaisedHandler = (event: Event) => {
+      handRaisedNotification.show({
+        message: (event as CustomEvent<{notificationMessage: string}>).detail.notificationMessage,
+      });
+    };
+
+    window.addEventListener(WebAppEvents.CALL.HAND_RAISED, handRaisedHandler);
+
+    return () => {
+      window.removeEventListener(WebAppEvents.CALL.HAND_RAISED, handRaisedHandler);
+    };
+  }, [handRaisedNotification]);
+
+  function toggleIsHandRaised(currentIsHandRaised: boolean) {
+    selfParticipant.handRaisedAt(new Date().getTime());
+    sendHandRaised(!currentIsHandRaised, call);
+  }
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (viewMode !== CallingViewMode.FULL_SCREEN) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      preventFocusOutside(event, 'video-calling');
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [viewMode]);
 
   const {showAlert, isGroupCall, clearShowAlert} = useCallAlertState();
 
   const totalPages = callPages.length;
-
-  // To be changed when design chooses a breakpoint, the conditional can be integrated to the ui-kit directly
-  const horizontalSmBreakpoint = useMatchMedia('max-width: 680px');
-  const horizontalXsBreakpoint = useMatchMedia('max-width: 500px');
-  const verticalBreakpoint = useMatchMedia('max-height: 420px');
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent): void => {
-      event.preventDefault();
-      preventFocusOutside(event, 'video-calling');
-    };
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, []);
 
   const callGroupStartedAlert = t(isGroupCall ? 'startedVideoGroupCallingAlert' : 'startedVideoCallingAlert', {
     conversationName,
@@ -273,350 +236,263 @@ const FullscreenVideoCall: React.FC<FullscreenVideoCallProps> = ({
     cameraStatus: t(selfSharesCamera ? 'cameraStatusOn' : 'cameraStatusOff'),
   });
 
+  const isMobile = useActiveWindowMatchMedia(QUERY.mobile);
+  const isPaginationVisible = !maximizedParticipant && activeCallViewTab === CallViewTab.ALL && totalPages > 1;
+
+  const isModerator = selfUser && roles[selfUser.id] === DefaultConversationRoleName.WIRE_ADMIN;
+
   return (
-    <div id="video-calling" className="video-calling">
-      <div id="video-title" className="video-title">
-        {horizontalSmBreakpoint && (
-          <IconButton
-            variant={IconButtonVariant.SECONDARY}
-            className=" icon-back"
-            css={{height: '25px', left: '5px', position: 'absolute', top: '10px'}}
-            onClick={minimize}
-          />
-        )}
+    <div
+      className={cx('video-calling-wrapper', {
+        'app--small-offset': hasOffset && isMiniMode,
+        'app--large-offset': hasOffset && !isMiniMode,
+      })}
+    >
+      <div id="video-calling" className="video-calling">
+        <div css={videoTopBarStyles}>
+          <div id="video-title" className="video-title">
+            {/* Calling conversation name and duration */}
+            <div
+              className="video-remote-name"
+              aria-label={showAlert ? callGroupStartedAlert : onGoingGroupCallAlert}
+              tabIndex={TabIndex.FOCUSABLE}
+              ref={element => {
+                if (showAlert) {
+                  element?.focus();
+                }
+              }}
+              onBlur={() => clearShowAlert()}
+            >
+              <h2 className="video-remote-title">{conversationName}</h2>
 
-        {/* Calling conversation name and duration */}
-        <div
-          className="video-remote-name"
-          aria-label={showAlert ? callGroupStartedAlert : onGoingGroupCallAlert}
-          tabIndex={TabIndex.FOCUSABLE}
-          ref={element => {
-            if (showAlert) {
-              element?.focus();
-            }
-          }}
-          onBlur={() => clearShowAlert()}
-        >
-          <h2 className="video-remote-title">{conversationName}</h2>
+              <div data-uie-name="video-timer" className="video-timer label-xs">
+                <Duration startedAt={startedAt} />
+              </div>
+            </div>
 
-          <div data-uie-name="video-timer" className="video-timer label-xs">
-            <Duration startedAt={startedAt} />
+            {muteState === MuteState.REMOTE_MUTED && (
+              <div
+                className="video-title__info-bar"
+                style={{
+                  position: 'absolute',
+                  right: '12px',
+                }}
+              >
+                {t('muteStateRemoteMute')}
+              </div>
+            )}
+          </div>
+          <div css={headerActionsWrapperStyles}>
+            {!isMobile && isPaginationVisible && (
+              <Pagination
+                totalPages={totalPages}
+                currentPage={currentPage}
+                onChangePage={newPage => changePage(newPage, call)}
+              />
+            )}
+
+            {isMobile && (
+              <IconButton
+                variant={IconButtonVariant.PRIMARY}
+                css={minimizeButtonStyles}
+                onClick={minimize}
+                onKeyDown={event =>
+                  handleKeyDown({
+                    event,
+                    callback: minimize,
+                    keys: [KEY.ENTER, KEY.SPACE],
+                  })
+                }
+                type="button"
+                data-uie-name="do-call-controls-video-minimize"
+                title={t('videoCallOverlayCloseFullScreen')}
+              >
+                {viewMode === CallingViewMode.DETACHED_WINDOW ? <Icon.CloseDetachedWindowIcon /> : <Icon.MessageIcon />}
+              </IconButton>
+            )}
+
+            {isDetachedCallingFeatureEnabled() && viewMode !== CallingViewMode.DETACHED_WINDOW && (
+              <IconButton
+                variant={IconButtonVariant.PRIMARY}
+                css={openDetachedWindowButtonStyles}
+                onClick={openPopup}
+                onKeyDown={event =>
+                  handleKeyDown({
+                    event,
+                    callback: openPopup,
+                    keys: [KEY.ENTER, KEY.SPACE],
+                  })
+                }
+                type="button"
+                data-uie-name="do-call-controls-video-maximize"
+                title={t('videoCallOverlayOpenPopupWindow')}
+              >
+                <Icon.OpenDetachedWindowIcon />
+              </IconButton>
+            )}
           </div>
         </div>
 
-        {muteState === MuteState.REMOTE_MUTED && (
-          <div
-            className="video-title__info-bar"
-            style={{
-              position: 'absolute',
-              right: '12px',
-            }}
-          >
-            {t('muteStateRemoteMute')}
+        <div id="video-element-remote" className="video-element-remote">
+          <GroupVideoGrid
+            maximizedParticipant={maximizedParticipant}
+            selfParticipant={selfParticipant}
+            grid={
+              activeCallViewTab === CallViewTab.SPEAKERS
+                ? {
+                    grid: activeSpeakers,
+                    thumbnail: null,
+                  }
+                : videoGrid
+            }
+            call={call}
+            setMaximizedParticipant={participant => setMaximizedParticipant(call, participant)}
+          />
+          {classifiedDomains && (
+            <ConversationClassifiedBar
+              conversation={conversation}
+              classifiedDomains={classifiedDomains}
+              style={{
+                ...classifiedBarStyles,
+              }}
+            />
+          )}
+        </div>
+
+        {isMobile && isPaginationVisible && (
+          <div css={paginationWrapperStyles}>
+            <Pagination
+              totalPages={totalPages}
+              currentPage={currentPage}
+              onChangePage={newPage => changePage(newPage, call)}
+              className={paginationStyles}
+            />
           </div>
         )}
-      </div>
 
-      <div id="video-element-remote" className="video-element-remote">
-        <GroupVideoGrid
-          maximizedParticipant={maximizedParticipant}
-          selfParticipant={selfParticipant}
-          grid={
-            activeCallViewTab === CallViewTab.SPEAKERS
-              ? {
-                  grid: activeSpeakers,
-                  thumbnail: null,
-                }
-              : videoGrid
-          }
-          setMaximizedParticipant={participant => setMaximizedParticipant(call, participant)}
-        />
-        {classifiedDomains && (
-          <ConversationClassifiedBar
-            conversation={conversation}
-            classifiedDomains={classifiedDomains}
-            style={{
-              ...classifiedBarStyles,
-            }}
-          />
-        )}
-        {!maximizedParticipant && activeCallViewTab === CallViewTab.ALL && totalPages > 1 && (
+        {!isChoosingScreen && (
           <>
-            {currentPage !== totalPages - 1 && (
-              <button
-                data-uie-name="pagination-next"
-                onClick={() => changePage(currentPage + 1, call)}
-                onKeyDown={event => handleKeyDown(event, () => changePage(currentPage + 1, call))}
-                type="button"
-                className="button-reset-default"
-                css={{
-                  ...paginationButtonStyles,
-                  borderBottomLeftRadius: 32,
-                  borderTopLeftRadius: 32,
-                  right: 0,
-                }}
+            {emojis.map(({id, emoji, left, from}) => (
+              <div
+                key={id}
+                role="img"
+                className="emoji"
+                aria-label={t('callReactionsAriaLabel', {from, emoji})}
+                style={{left}}
+                data-uie-from={from}
+                data-uie-value={emoji}
+                data-uie-name="flying-emoji"
               >
-                <Icon.ArrowNext css={{left: 4, position: 'relative'}} />
-              </button>
-            )}
-            {currentPage !== 0 && (
-              <button
-                data-uie-name="pagination-previous"
-                type="button"
-                onClick={() => changePage(currentPage - 1, call)}
-                onKeyDown={event => handleKeyDown(event, () => changePage(currentPage - 1, call))}
-                className="button-reset-default"
-                css={{
-                  ...paginationButtonStyles,
-                  borderBottomRightRadius: 32,
-                  borderTopRightRadius: 32,
-                  left: 0,
-                }}
-              >
-                <Icon.ArrowNext css={{position: 'relative', right: 4, transform: 'rotate(180deg)'}} />
-              </button>
-            )}
-            {!verticalBreakpoint && (
-              <div className="pagination-wrapper">
-                <Pagination
-                  totalPages={totalPages}
-                  currentPage={currentPage}
-                  onChangePage={newPage => changePage(newPage, call)}
-                />
+                <span aria-hidden="true">{emoji}</span>
+                <span className="emoji-text" aria-hidden="true">
+                  {from}
+                </span>
               </div>
-            )}
+            ))}
+            <VideoControls
+              activeCallViewTab={activeCallViewTab}
+              call={call}
+              propertiesRepository={propertiesRepository}
+              isMuted={isMuted}
+              isParticipantsListOpen={isParticipantsListOpen}
+              toggleParticipantsList={toggleParticipantsList}
+              canShareScreen={canShareScreen}
+              conversation={conversation}
+              mediaDevicesHandler={mediaDevicesHandler}
+              minimize={minimize}
+              leave={leave}
+              toggleMute={toggleMute}
+              toggleScreenshare={toggleScreenshare}
+              toggleCamera={toggleCamera}
+              toggleIsHandRaised={toggleIsHandRaised}
+              switchMicrophoneInput={switchMicrophoneInput}
+              switchSpeakerOutput={switchSpeakerOutput}
+              switchBlurredBackground={switchBlurredBackground}
+              switchCameraInput={switchCameraInput}
+              setActiveCallViewTab={setActiveCallViewTab}
+              setMaximizedParticipant={setMaximizedParticipant}
+              sendEmoji={sendEmoji}
+            />
           </>
         )}
       </div>
-
-      {!isChoosingScreen && (
-        <div id="video-controls" className="video-controls">
-          <ul className="video-controls__wrapper">
-            {!horizontalSmBreakpoint && (
-              <li className="video-controls__item__minimize">
-                <button
-                  className="video-controls__button"
-                  css={videoControlInActiveStyles}
-                  onClick={minimize}
-                  onKeyDown={event => handleKeyDown(event, () => minimize())}
-                  type="button"
-                  aria-labelledby="minimize-label"
-                  data-uie-name="do-call-controls-video-minimize"
-                >
-                  {hasUnreadMessages ? (
-                    <Icon.MessageUnread
-                      css={{
-                        marginRight: '-2px',
-                        marginTop: '-2px',
-                      }}
-                    />
-                  ) : (
-                    <Icon.Message />
-                  )}
-                  <span id="minimize-label" className="video-controls__button__label">
-                    {t('videoCallOverlayConversations')}
-                  </span>
-                </button>
-              </li>
-            )}
-            <div className="video-controls__centered-items">
-              <li className="video-controls__item">
-                <button
-                  className="video-controls__button"
-                  data-uie-value={!isMuted ? 'inactive' : 'active'}
-                  onClick={() => toggleMute(call, !isMuted)}
-                  onKeyDown={event => handleKeyDown(event, () => toggleMute(call, !isMuted))}
-                  css={!isMuted ? videoControlActiveStyles : videoControlInActiveStyles}
-                  type="button"
-                  aria-labelledby="mute-label"
-                  data-uie-name="do-call-controls-video-call-mute"
-                  role="switch"
-                  aria-checked={!isMuted}
-                >
-                  <span id="mute-label" className="video-controls__button__label">
-                    {t('videoCallOverlayMicrophone')}
-                  </span>
-
-                  {isMuted ? <Icon.MicOff width={16} height={16} /> : <Icon.MicOn width={16} height={16} />}
-                </button>
-
-                {showSwitchMicrophone && (
-                  <button
-                    className="device-toggle-button"
-                    css={audioOptionsOpen ? videoControlActiveStyles : videoControlInActiveStyles}
-                    onClick={() => setAudioOptionsOpen(prev => !prev)}
-                    onKeyDown={event => handleKeyDown(event, () => setAudioOptionsOpen(prev => !prev))}
-                    onBlur={event => {
-                      if (!event.currentTarget.contains(event.relatedTarget)) {
-                        setAudioOptionsOpen(false);
-                      }
-                    }}
-                  >
-                    {audioOptionsOpen ? (
-                      <>
-                        <Select
-                          // eslint-disable-next-line jsx-a11y/no-autofocus
-                          autoFocus
-                          value={selectedAudioOptions}
-                          id="select-microphone"
-                          dataUieName="select-microphone"
-                          controlShouldRenderValue={false}
-                          isClearable={false}
-                          backspaceRemovesValue={false}
-                          hideSelectedOptions={false}
-                          options={audioOptions}
-                          onChange={selectedOption => {
-                            updateAudioOptions(
-                              String(selectedOption?.value),
-                              String(selectedOption?.value).includes('input'),
-                            );
-                          }}
-                          onKeyDown={event => isEscapeKey(event) && setAudioOptionsOpen(false)}
-                          menuPlacement="top"
-                          menuIsOpen
-                          wrapperCSS={{marginBottom: 0}}
-                        />
-                        <Icon.Chevron css={{height: '16px'}} />
-                      </>
-                    ) : (
-                      <Icon.Chevron css={{rotate: '180deg', height: '16px'}} />
-                    )}
-                  </button>
-                )}
-              </li>
-
-              {showToggleVideo && (
-                <li className="video-controls__item">
-                  <button
-                    className="video-controls__button"
-                    data-uie-value={selfSharesCamera ? 'active' : 'inactive'}
-                    onClick={() => toggleCamera(call)}
-                    onKeyDown={event => handleKeyDown(event, () => toggleCamera(call))}
-                    role="switch"
-                    aria-checked={selfSharesCamera}
-                    tabIndex={TabIndex.FOCUSABLE}
-                    css={selfSharesCamera ? videoControlActiveStyles : videoControlInActiveStyles}
-                    aria-labelledby="video-label"
-                    data-uie-name="do-call-controls-toggle-video"
-                  >
-                    {selfSharesCamera ? (
-                      <Icon.Camera width={16} height={16} />
-                    ) : (
-                      <Icon.CameraOff width={16} height={16} />
-                    )}
-
-                    <span id="video-label" className="video-controls__button__label">
-                      {t('videoCallOverlayCamera')}
-                    </span>
-                  </button>
-
-                  {showSwitchVideo && (
-                    <button
-                      className="device-toggle-button"
-                      css={videoOptionsOpen ? videoControlActiveStyles : videoControlInActiveStyles}
-                      onClick={() => setVideoOptionsOpen(prev => !prev)}
-                      onKeyDown={event => handleKeyDown(event, () => setVideoOptionsOpen(prev => !prev))}
-                      onBlur={event => {
-                        if (!event.currentTarget.contains(event.relatedTarget)) {
-                          setVideoOptionsOpen(false);
-                        }
-                      }}
-                    >
-                      {videoOptionsOpen ? (
-                        <>
-                          <Select
-                            // eslint-disable-next-line jsx-a11y/no-autofocus
-                            autoFocus
-                            value={selectedVideoOptions}
-                            onChange={selectedOption => updateVideoOptions(String(selectedOption?.value))}
-                            onKeyDown={event => isEscapeKey(event) && setVideoOptionsOpen(false)}
-                            id="select-camera"
-                            dataUieName="select-camera"
-                            controlShouldRenderValue={false}
-                            isClearable={false}
-                            backspaceRemovesValue={false}
-                            hideSelectedOptions={false}
-                            options={videoOptions}
-                            menuPlacement="top"
-                            menuIsOpen
-                            wrapperCSS={{marginBottom: 0}}
-                          />
-                          <Icon.Chevron css={{height: '16px'}} />
-                        </>
-                      ) : (
-                        <Icon.Chevron css={{rotate: '180deg', height: '16px'}} />
-                      )}
-                    </button>
-                  )}
-                </li>
-              )}
-
-              <li className="video-controls__item">
-                <button
-                  className={`video-controls__button ${!canShareScreen ? 'with-tooltip with-tooltip--top' : ''}`}
-                  data-tooltip={t('videoCallScreenShareNotSupported')}
-                  css={
-                    !canShareScreen
-                      ? videoControlDisabledStyles
-                      : selfSharesScreen
-                        ? videoControlActiveStyles
-                        : videoControlInActiveStyles
-                  }
-                  onClick={() => toggleScreenshare(call)}
-                  onKeyDown={event => handleKeyDown(event, () => toggleScreenshare(call))}
-                  type="button"
-                  aria-labelledby="screen-share-label"
-                  data-uie-value={selfSharesScreen ? 'active' : 'inactive'}
-                  data-uie-enabled={canShareScreen ? 'true' : 'false'}
-                  data-uie-name="do-toggle-screen"
-                >
-                  {selfSharesScreen ? (
-                    <Icon.Screenshare width={16} height={16} />
-                  ) : (
-                    <Icon.ScreenshareOff width={16} height={16} />
-                  )}
-                  <span id="screen-share-label" className="video-controls__button__label">
-                    {t('videoCallOverlayShareScreen')}
-                  </span>
-                </button>
-              </li>
-
-              <li className="video-controls__item">
-                <button
-                  className="video-controls__button video-controls__button--red"
-                  onClick={() => leave(call)}
-                  onKeyDown={event => handleKeyDown(event, () => leave(call))}
-                  type="button"
-                  aria-labelledby="leave-label"
-                  data-uie-name="do-call-controls-video-call-cancel"
-                >
-                  <Icon.Hangup />
-                  <span id="leave-label" className="video-controls__button__label">
-                    {t('videoCallOverlayHangUp')}
-                  </span>
-                </button>
-              </li>
-            </div>
-            {!horizontalXsBreakpoint && (
-              <div
-                css={{...(!horizontalSmBreakpoint && {minWidth: '157px'}), display: 'flex', justifyContent: 'flex-end'}}
-              >
-                {participants.length > 2 && !horizontalXsBreakpoint && (
-                  <ButtonGroup
-                    items={Object.values(CallViewTabs)}
-                    onChangeItem={item => {
-                      setActiveCallViewTab(item);
-                      setMaximizedParticipant(call, null);
-                    }}
-                    currentItem={activeCallViewTab}
-                    textSubstitute={participants.length.toString()}
-                  />
-                )}
-              </div>
-            )}
-          </ul>
-        </div>
+      {isParticipantsListOpen && (
+        <CallingParticipantList
+          handRaisedParticipants={handRaisedParticipants}
+          callingRepository={callingRepository}
+          conversation={conversation}
+          participants={participants}
+          isModerator={isModerator}
+          isSelfVerified={selfUser?.is_verified()}
+          showParticipants={true}
+        />
       )}
+      <ModalComponent
+        isShown={isConfirmCloseModalOpen}
+        onClosed={() => setIsConfirmCloseModalOpen(false)}
+        onBgClick={() => setIsConfirmCloseModalOpen(false)}
+        data-uie-name="confirm-close-with-active-screen-share-modal"
+        wrapperCSS={{borderRadius: 10, width: 328}}
+      >
+        {isConfirmCloseModalOpen && (
+          <>
+            <div className="modal__header" data-uie-name="status-modal-title">
+              <h2 className="text-medium" id="modal-title">
+                {t('videoCallScreenShareEndConfirm')}
+              </h2>
+            </div>
+
+            <div className="modal__body">
+              <div id="modal-description-text">{t('videoCallScreenShareEndConfirmDescription')}</div>
+              <Checkbox
+                wrapperCSS={{marginTop: 16}}
+                data-uie-name="do-not-ask-again-checkbox"
+                id="do-not-ask-again-checkbox"
+                onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
+                  localStorage.setItem(
+                    LOCAL_STORAGE_KEY_FOR_SCREEN_SHARING_CONFIRM_MODAL,
+                    event.target.checked.toString(),
+                  )
+                }
+              >
+                <CheckboxLabel className="label-xs" htmlFor="do-not-ask-again-checkbox">
+                  {t('qualityFeedback.doNotAskAgain')}
+                </CheckboxLabel>
+              </Checkbox>
+              <div className="modal__buttons">
+                <button
+                  key="cancel"
+                  type="button"
+                  onClick={() => setIsConfirmCloseModalOpen(false)}
+                  data-uie-name="do-close"
+                  className="modal__button modal__button--secondary"
+                >
+                  {t('modalConfirmSecondary')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => callingRepository.setViewModeMinimized()}
+                  className="modal__button modal__button--primary"
+                  data-uie-name="do-action"
+                  key="modal-primary-button"
+                >
+                  {t('modalAcknowledgeAction')}
+                </button>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              className="modal__header__button"
+              onClick={() => setIsConfirmCloseModalOpen(false)}
+              aria-label={'closeBtnTitle'}
+              data-uie-name="do-close"
+            >
+              <Icon.CloseIcon className="modal__header__icon" aria-hidden="true" />
+            </button>
+          </>
+        )}
+      </ModalComponent>
     </div>
   );
 };

@@ -21,26 +21,25 @@ import React, {useEffect, useState} from 'react';
 
 import type {RegisterData} from '@wireapp/api-client/lib/auth';
 import {BackendErrorLabel} from '@wireapp/api-client/lib/http';
-import {useIntl} from 'react-intl';
 import {connect} from 'react-redux';
+import {Navigate} from 'react-router-dom';
 import {AnyAction, Dispatch} from 'redux';
 
 import {UrlUtil} from '@wireapp/commons';
 import {Column, Columns, H1, Muted} from '@wireapp/react-ui-kit';
 
+import {t} from 'Util/LocalizerUtil';
 import {noop} from 'Util/util';
 
 import {GuestLoginColumn, IsLoggedInColumn, Separator} from './ConversationJoinComponents';
-import {ConversationJoinFull, ConversationJoinInvalid} from './ConversationJoinInvalid';
+import {ConversationJoinFull} from './ConversationJoinInvalid';
 import {EntropyContainer} from './EntropyContainer';
 import {Login} from './Login';
 import {Page} from './Page';
 
 import {Config} from '../../Config';
-import {conversationJoinStrings} from '../../strings';
 import {AppAlreadyOpen} from '../component/AppAlreadyOpen';
 import {JoinGuestLinkPasswordModal} from '../component/JoinGuestLinkPasswordModal';
-import {UnsupportedBrowser} from '../component/UnsupportedBrowser';
 import {WirelessContainer} from '../component/WirelessContainer';
 import {EXTERNAL_ROUTE} from '../externalRoute';
 import {actionRoot as ROOT_ACTIONS} from '../module/action';
@@ -50,7 +49,7 @@ import * as AuthSelector from '../module/selector/AuthSelector';
 import * as ClientSelector from '../module/selector/ClientSelector';
 import * as ConversationSelector from '../module/selector/ConversationSelector';
 import * as SelfSelector from '../module/selector/SelfSelector';
-import {QUERY_KEY} from '../route';
+import {QUERY_KEY, ROUTE} from '../route';
 import * as AccentColor from '../util/AccentColor';
 
 type Props = React.HTMLProps<HTMLDivElement>;
@@ -74,7 +73,6 @@ const ConversationJoinComponent = ({
   doGetAllClients,
 }: Props & ConnectedProps & DispatchProps) => {
   const nameInput = React.useRef<HTMLInputElement>(null);
-  const {formatMessage: _} = useIntl();
 
   const conversationHasPassword = conversationInfo?.has_password;
 
@@ -92,7 +90,6 @@ const ConversationJoinComponent = ({
   const [showEntropyForm, setShowEntropyForm] = useState(false);
   const [isTemporaryGuest, setIsTemporaryGuest] = useState<boolean>(false);
   const isEntropyRequired = Config.getConfig().FEATURE.ENABLE_EXTRA_CLIENT_ENTROPY;
-
   const isFetching = isFetchingAuth || isFetchingConversation || conversationInfoFetching;
 
   const isWirePublicInstance = Config.getConfig().BRAND_NAME === 'Wire';
@@ -209,6 +206,7 @@ const ConversationJoinComponent = ({
   };
 
   const checkNameValidity = async (event: React.FormEvent) => {
+    setIsTemporaryGuest(true);
     event.preventDefault();
     if (!nameInput.current) {
       return;
@@ -235,7 +233,7 @@ const ConversationJoinComponent = ({
   };
 
   if (!isValidLink) {
-    return <ConversationJoinInvalid />;
+    return <Navigate to={ROUTE.CONVERSATION_JOIN_INVALID} replace />;
   }
 
   const isFullConversation =
@@ -250,7 +248,7 @@ const ConversationJoinComponent = ({
   }
 
   return (
-    <UnsupportedBrowser isTemporaryGuest>
+    <>
       {isJoinGuestLinkPasswordModalOpen && (
         <JoinGuestLinkPasswordModal
           onClose={() => {
@@ -270,11 +268,11 @@ const ConversationJoinComponent = ({
         <AppAlreadyOpen />
         <div style={{display: 'flex', alignItems: 'center', flexDirection: 'column', marginBottom: '2rem'}}>
           <H1 style={{fontWeight: 500, marginTop: '0', marginBottom: '1rem'}} data-uie-name="status-join-headline">
-            {_(conversationJoinStrings.mainHeadline)}
+            {t('conversationJoin.mainHeadline')}
           </H1>
           {!isWirePublicInstance && (
             <Muted data-uie-name="status-join-subhead">
-              {_(conversationJoinStrings.headline, {domain: window.location.hostname})}
+              {t('conversationJoin.headline', {domain: window.location.hostname})}
             </Muted>
           )}
         </div>
@@ -297,10 +295,6 @@ const ConversationJoinComponent = ({
                   nameInput={nameInput}
                   onNameChange={onNameChange}
                   checkNameValidity={checkNameValidity}
-                  handleSubmit={async () => {
-                    setIsTemporaryGuest(true);
-                    await handleSubmit();
-                  }}
                   isSubmitingName={isSubmitingName}
                   isValidName={isValidName}
                   conversationError={conversationError}
@@ -311,7 +305,7 @@ const ConversationJoinComponent = ({
           </Column>
         </Columns>
       </WirelessContainer>
-    </UnsupportedBrowser>
+    </>
   );
 };
 

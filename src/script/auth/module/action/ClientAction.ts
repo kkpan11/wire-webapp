@@ -22,6 +22,8 @@ import {ClientInfo} from '@wireapp/core/lib/client/';
 
 import {Runtime} from '@wireapp/commons';
 
+import {getClientMLSConfig} from 'src/script/client/clientMLSConfig';
+
 import {ClientActionCreator} from './creator/';
 
 import * as StringUtil from '../../util/stringUtil';
@@ -62,7 +64,8 @@ export class ClientAction {
     entropyData?: Uint8Array,
   ): ThunkAction => {
     return async (dispatch, getState, {core, actions: {clientAction}}) => {
-      const localClient = await core.initClient();
+      const localClient = await core.getLocalClient();
+
       const creationStatus = localClient
         ? {isNew: false, client: localClient}
         : {
@@ -74,6 +77,8 @@ export class ClientAction {
             ),
           };
 
+      const commonConfig = (await core.service?.team.getCommonFeatureConfig()) ?? {};
+      await core.initClient(creationStatus.client, getClientMLSConfig(commonConfig));
       dispatch(ClientActionCreator.successfulInitializeClient(creationStatus));
     };
   };
@@ -84,6 +89,7 @@ export class ClientAction {
     }
     const deviceLabel = `${Runtime.getOS()}${Runtime.getOS().version ? ` ${Runtime.getOS().version}` : ''}`;
     let deviceModel = StringUtil.capitalize(Runtime.getBrowserName());
+    const dev = Runtime.isEdgeEnvironment() ? '(Edge)' : Runtime.isStagingEnvironment() ? '(Staging)' : false;
 
     if (Runtime.isDesktopApp()) {
       if (Runtime.isMacOS()) {
@@ -96,7 +102,9 @@ export class ClientAction {
     } else if (clientType === ClientType.TEMPORARY) {
       deviceModel = `${deviceModel} (Temporary)`;
     }
-
+    if (dev) {
+      deviceModel = `${deviceModel} ${dev}`;
+    }
     return {
       classification: ClientClassification.DESKTOP,
       cookieLabel: undefined,

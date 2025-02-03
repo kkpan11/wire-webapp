@@ -26,7 +26,7 @@ updates:
       eslint:
         patterns:
           - '*eslint*'
-      lexial:
+      lexical:
         patterns:
           - '*lexical*'
       datadog:
@@ -35,6 +35,12 @@ updates:
 
     ignore:
       - dependency-name: '@wireapp/avs'
+      # Wait until we have next release with wasm folder
+      - dependency-name: '@mediapipe/tasks-vision'
+        versions:
+          - '0.10.16'
+      - dependency-name: '@types/node'
+      - dependency-name: 'typescript'
 
   # Server dependencies
   - package-ecosystem: npm
@@ -51,9 +57,8 @@ updates:
       - dependency-name: geolite2
         versions:
           - '>= 2.a'
+      - dependency-name: 'typescript'
       - dependency-name: '@types/node'
-        versions:
-          - '>= 13.a'
 
   # Github actions
   - package-ecosystem: 'github-actions'

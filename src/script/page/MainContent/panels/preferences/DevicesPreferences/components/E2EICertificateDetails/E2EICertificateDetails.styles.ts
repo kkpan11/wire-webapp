@@ -22,11 +22,11 @@ import {CSSObject} from '@emotion/serialize';
 import {MLSStatuses} from 'src/script/E2EIdentity';
 
 const MLSStatusColor = {
-  [MLSStatuses.VALID]: 'var(--green-500)',
-  [MLSStatuses.EXPIRED]: 'var(--red-500)',
-  [MLSStatuses.NOT_DOWNLOADED]: 'var(--red-500)',
-  [MLSStatuses.EXPIRES_SOON]: 'var(--green-500)',
-  [MLSStatuses.REVOKED]: 'var(--red-500)',
+  [MLSStatuses.VALID]: 'var(--success-color)',
+  [MLSStatuses.EXPIRED]: 'var(--danger-color)',
+  [MLSStatuses.NOT_ACTIVATED]: 'var(--danger-color)',
+  [MLSStatuses.EXPIRES_SOON]: 'var(--success-color)',
+  [MLSStatuses.REVOKED]: 'var(--danger-color)',
 };
 
 type stylesProps = {
@@ -67,7 +67,7 @@ export const styles: stylesProps = {
     marginBlock: '6px',
   },
   notAvailable: {
-    color: 'var(--gray-70)',
+    color: 'var(--text-input-placeholder)',
   },
   serialNumber: {
     fontSize: 'var(--font-size-medium)',

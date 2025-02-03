@@ -26,10 +26,10 @@ import {showInviteModal} from 'Components/Modals/InviteModal';
 import {showServiceModal} from 'Components/Modals/ServiceModal';
 import {showUserModal} from 'Components/Modals/UserModal';
 import {SearchInput} from 'Components/SearchInput';
-import {Conversation} from 'src/script/entity/Conversation';
 import {User} from 'src/script/entity/User';
 import {IntegrationRepository} from 'src/script/integration/IntegrationRepository';
 import {ServiceEntity} from 'src/script/integration/ServiceEntity';
+import {SidebarTabs, useSidebarStore} from 'src/script/page/LeftSidebar/panels/Conversations/useSidebarStore';
 import {UserRepository} from 'src/script/user/UserRepository';
 import {MainViewModel} from 'src/script/view_model/MainViewModel';
 import {t} from 'Util/LocalizerUtil';
@@ -53,7 +53,6 @@ type StartUIProps = {
   integrationRepository: IntegrationRepository;
   isFederated: boolean;
   mainViewModel: MainViewModel;
-  onClose: () => void;
   searchRepository: SearchRepository;
   teamRepository: TeamRepository;
   selfUser: User;
@@ -68,7 +67,6 @@ const enum Tabs {
 }
 
 const StartUI: React.FC<StartUIProps> = ({
-  onClose,
   userState = container.resolve(UserState),
   teamState = container.resolve(TeamState),
   conversationState = container.resolve(ConversationState),
@@ -82,14 +80,8 @@ const StartUI: React.FC<StartUIProps> = ({
   selfUser,
 }) => {
   const brandName = Config.getConfig().BRAND_NAME;
-  const {
-    canInviteTeamMembers,
-    canSearchUnconnectedUsers,
-    canManageServices,
-    canChatWithServices,
-    canCreateGuestRoom,
-    canCreateGroupConversation,
-  } = generatePermissionHelpers(selfUser.teamRole());
+  const {canInviteTeamMembers, canSearchUnconnectedUsers, canManageServices, canChatWithServices} =
+    generatePermissionHelpers(selfUser.teamRole());
 
   useEffect(() => {
     void conversationRepository.loadMissingConversations();
@@ -97,27 +89,34 @@ const StartUI: React.FC<StartUIProps> = ({
 
   const actions = mainViewModel.actions;
   const isTeam = teamState.isTeam();
-  const teamName = teamState.teamName();
+  const isMLSEnabled = teamState.isMLSEnabled();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState(Tabs.PEOPLE);
+
+  const {setCurrentTab: setCurrentSidebarTab} = useSidebarStore();
 
   const peopleSearchResults = useRef<SearchResultsData | undefined>(undefined);
 
   const openFirstConversation = async (): Promise<void> => {
     if (peopleSearchResults.current) {
-      const {contacts, groups} = peopleSearchResults.current;
+      const {contacts} = peopleSearchResults.current;
       if (contacts.length > 0) {
         return openContact(contacts[0]);
-      }
-      if (groups.length > 0) {
-        return openConversation(groups[0]);
       }
     }
   };
 
   const openContact = async (user: User) => {
+    const isSameTeam = user.teamId && selfUser.teamId && user.teamId === selfUser.teamId;
+    const has1to1Conversation = conversationState.has1to1ConversationWithUser(user.qualifiedId);
+
+    if (isSameTeam && !has1to1Conversation) {
+      return showUserModal({domain: user.domain, id: user.id});
+    }
+
     const conversationEntity = await actions.getOrCreate1to1Conversation(user);
+    setCurrentSidebarTab(SidebarTabs.RECENT);
     return actions.open1to1Conversation(conversationEntity);
   };
 
@@ -139,24 +138,18 @@ const StartUI: React.FC<StartUIProps> = ({
 
   const openInviteModal = () => showInviteModal({selfUser});
 
-  const openConversation = async (conversation: Conversation): Promise<void> => {
-    await actions.openGroupConversation(conversation);
-    onClose();
-  };
-
   const before = (
     <div id="start-ui-header" className={cx('start-ui-header', {'start-ui-header-integrations': isTeam})}>
       <div className="start-ui-header-user-input" data-uie-name="enter-search">
         <SearchInput
           input={searchQuery}
-          placeholder={t('searchPeoplePlaceholder')}
-          selectedUsers={[]}
+          placeholder={t('searchPeopleOnlyPlaceholder')}
           setInput={setSearchQuery}
           onEnter={openFirstConversation}
           forceDark
         />
       </div>
-      {isTeam && canChatWithServices() && (
+      {isTeam && canChatWithServices() && !isMLSEnabled && (
         <ul className="start-ui-list-tabs">
           <li className={`start-ui-list-tab ${activeTab === Tabs.PEOPLE ? 'active' : ''}`}>
             <button
@@ -203,11 +196,8 @@ const StartUI: React.FC<StartUIProps> = ({
           searchRepository={searchRepository}
           conversationRepository={conversationRepository}
           canInviteTeamMembers={canInviteTeamMembers()}
-          canCreateGroupConversation={canCreateGroupConversation()}
-          canCreateGuestRoom={canCreateGuestRoom()}
           userRepository={userRepository}
           onClickContact={openContact}
-          onClickConversation={openConversation}
           onClickUser={openOther}
           onSearchResults={searchResult => (peopleSearchResults.current = searchResult)}
         />
@@ -224,18 +214,17 @@ const StartUI: React.FC<StartUIProps> = ({
   const footer = !isTeam ? (
     <button className="start-ui-import" onClick={openInviteModal} data-uie-name="show-invite-modal">
       <span className="icon-invite start-ui-import-icon"></span>
-      <span>{t('searchInvite', brandName)}</span>
+      <span>{t('searchInvite', {brandName})}</span>
     </button>
   ) : undefined;
 
   return (
     <ListWrapper
       id="start-ui"
-      header={teamName}
       headerUieName="status-team-name-search"
-      onClose={onClose}
       before={before}
       footer={footer}
+      hasHeader={false}
     >
       {content}
     </ListWrapper>

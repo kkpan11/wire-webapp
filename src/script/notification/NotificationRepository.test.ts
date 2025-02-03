@@ -28,6 +28,7 @@ import {Runtime} from '@wireapp/commons';
 import {Availability} from '@wireapp/protocol-messaging';
 import {WebAppEvents} from '@wireapp/webapp-events';
 
+import {CallingRepository} from 'src/script/calling/CallingRepository';
 import {TERMINATION_REASON} from 'src/script/calling/enum/TerminationReason';
 import {ConnectionMapper} from 'src/script/connection/ConnectionMapper';
 import {ConversationMapper} from 'src/script/conversation/ConversationMapper';
@@ -60,7 +61,7 @@ import {createUuid} from 'Util/uuid';
 import {NotificationRepository} from './NotificationRepository';
 
 import {AudioRepository} from '../audio/AudioRepository';
-import {CallState} from '../calling/CallState';
+import {CallingViewMode, CallState} from '../calling/CallState';
 import {ConnectionEntity} from '../connection/ConnectionEntity';
 import {ConversationState} from '../conversation/ConversationState';
 import {Message} from '../entity/message/Message';
@@ -74,6 +75,7 @@ function buildNotificationRepository() {
     {} as any,
     new PermissionRepository(),
     new AudioRepository(),
+    {} as CallingRepository,
     userState,
     container.resolve(ConversationState),
     container.resolve(CallState),
@@ -99,7 +101,6 @@ describe('NotificationRepository', () => {
   let calculateTitleLength: (sectionString: string) => number;
 
   let notification_content: any;
-  const contentViewModelState: any = {};
 
   beforeEach(() => {
     [notificationRepository] = buildNotificationRepository();
@@ -134,17 +135,12 @@ describe('NotificationRepository', () => {
     document.hasFocus = () => false;
     notificationRepository.updatePermissionState(PermissionStatusState.GRANTED);
     spyOn(Runtime, 'isSupportingNotifications').and.returnValue(true);
-    spyOn(notificationRepository['assetRepository'], 'generateAssetUrl').and.returnValue(
+    spyOn(notificationRepository['assetRepository'], 'getObjectUrl').and.returnValue(
       Promise.resolve('/image/logo/notification.png'),
     );
 
     const {setContentState} = useAppState.getState();
     setContentState(ContentState.CONVERSATION);
-    contentViewModelState.multitasking = {
-      isMinimized: () => true,
-    };
-    notificationRepository.setContentViewModelStates(contentViewModelState.state, contentViewModelState.multitasking);
-
     const showNotificationSpy = jest.spyOn(notificationRepository as any, 'showNotification');
 
     calculateTitleLength = sectionString => {
@@ -266,13 +262,14 @@ describe('NotificationRepository', () => {
       conversationState.activeConversation(conversation);
       document.hasFocus = () => true;
       spyOn(callState, 'joinedCall').and.returnValue(true);
+      jest.spyOn(callState, 'viewMode').mockReturnValueOnce(CallingViewMode.MINIMIZED);
 
       return notificationRepository
         .notify(message, undefined, conversation)
         .then(() => {
           expect(notificationRepository['showNotification']).not.toHaveBeenCalled();
 
-          contentViewModelState.multitasking.isMinimized = () => false;
+          jest.spyOn(callState, 'viewMode').mockReturnValueOnce(CallingViewMode.DETACHED_WINDOW);
 
           return notificationRepository.notify(message, undefined, conversation);
         })

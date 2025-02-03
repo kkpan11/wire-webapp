@@ -27,7 +27,15 @@ import {formatLocale} from 'Util/TimeUtil';
 import {noop} from 'Util/util';
 import {createUuid} from 'Util/uuid';
 
-import {Action, ModalContent, ModalItem, ModalOptions, ModalQueue, PrimaryModalType, Text} from './PrimaryModalTypes';
+import {
+  ButtonAction,
+  ModalContent,
+  ModalItem,
+  ModalOptions,
+  ModalQueue,
+  PrimaryModalType,
+  Text,
+} from './PrimaryModalTypes';
 
 import {Config} from '../../../Config';
 import {ClientNotificationData} from '../../../notification/PreferenceNotificationRepository';
@@ -56,7 +64,7 @@ const defaultContent: ModalContent = {
   messageHtml: '',
   modalUie: '',
   onBgClick: noop,
-  primaryAction: {} as Action,
+  primaryAction: {} as ButtonAction,
   secondaryAction: [],
   titleText: '',
   copyPassword: false,
@@ -134,6 +142,10 @@ const updateCurrentModalContent = (type: PrimaryModalType, options: ModalOptions
     hideCloseBtn = false,
     passwordOptional = false,
     text = {} as Text,
+    confirmCancelBtnLabel,
+    allButtonsFullWidth = false,
+    primaryBtnFirst = false,
+    closeOnSecondaryAction = true,
   } = options;
 
   const content = {
@@ -153,6 +165,10 @@ const updateCurrentModalContent = (type: PrimaryModalType, options: ModalOptions
     hideCloseBtn,
     titleText: text.title ?? '',
     passwordOptional,
+    confirmCancelBtnLabel,
+    allButtonsFullWidth,
+    primaryBtnFirst,
+    closeOnSecondaryAction,
   };
 
   switch (type) {
@@ -200,7 +216,10 @@ const updateCurrentModalContent = (type: PrimaryModalType, options: ModalOptions
       break;
     }
     case PrimaryModalType.CONFIRM: {
-      content.secondaryAction = {text: t('modalConfirmSecondary'), ...content.secondaryAction};
+      content.secondaryAction = {
+        text: content.confirmCancelBtnLabel || t('modalConfirmSecondary'),
+        ...content.secondaryAction,
+      };
       break;
     }
     case PrimaryModalType.INPUT:
@@ -214,7 +233,11 @@ const updateCurrentModalContent = (type: PrimaryModalType, options: ModalOptions
     case PrimaryModalType.SESSION_RESET: {
       content.titleText = t('modalSessionResetHeadline');
       content.primaryAction = {...primaryAction, text: t('modalAcknowledgeAction')};
-      content.messageHtml = t('modalSessionResetMessage', {}, replaceLink(Config.getConfig().URL.SUPPORT.BUG_REPORT));
+      content.messageHtml = t(
+        'modalSessionResetMessage',
+        undefined,
+        replaceLink(Config.getConfig().URL.SUPPORT.BUG_REPORT),
+      );
       break;
     }
   }

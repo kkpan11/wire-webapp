@@ -22,7 +22,6 @@ import {useEffect, useRef} from 'react';
 import {
   FeatureList,
   FeatureWithoutConfig,
-  Feature,
   FEATURE_KEY,
   FeatureStatus,
   SelfDeletingTimeout,
@@ -33,9 +32,9 @@ import {Runtime} from '@wireapp/commons';
 import {WebAppEvents} from '@wireapp/webapp-events';
 
 import {PrimaryModal} from 'Components/Modals/PrimaryModal';
-import {Action} from 'Components/Modals/PrimaryModal/PrimaryModalTypes';
+import {ButtonAction} from 'Components/Modals/PrimaryModal/PrimaryModalTypes';
 import {useKoSubscribableChildren} from 'Util/ComponentUtil';
-import {StringIdentifer, replaceLink, t} from 'Util/LocalizerUtil';
+import {replaceLink, t} from 'Util/LocalizerUtil';
 import {getLogger} from 'Util/Logger';
 import {formatDuration} from 'Util/TimeUtil';
 
@@ -44,15 +43,31 @@ import {loadFeatureConfig, saveFeatureConfig} from './FeatureConfigChangeNotifie
 import {Config} from '../../../../Config';
 import {TeamState} from '../../../../team/TeamState';
 
-const featureNotifications: Partial<
-  Record<
-    FEATURE_KEY,
-    (
-      oldConfig?: Feature<any> | FeatureWithoutConfig,
-      newConfig?: FeatureWithoutConfig | Feature<any> | undefined,
-    ) => undefined | {htmlMessage: string; title: StringIdentifer; primaryAction?: Action}
-  >
-> = {
+type Features =
+  | 'FileSharing'
+  | 'AudioVideo'
+  | 'Applock'
+  | 'DownloadPath'
+  | 'SelfDeletingMessages'
+  | 'ConferenceCalling'
+  | 'ConversationGuestLinks';
+
+type Title = `featureConfigChangeModal${Features}Headline`;
+
+type FeatureMessageGenerator = {
+  [K in keyof FeatureList]: (
+    oldConfig?: FeatureList[K],
+    newConfig?: FeatureList[K],
+  ) =>
+    | undefined
+    | {
+        htmlMessage: string;
+        title: Title;
+        primaryAction?: ButtonAction;
+      };
+};
+
+const featureNotifications: FeatureMessageGenerator = {
   [FEATURE_KEY.FILE_SHARING]: (oldConfig, newConfig) => {
     const status = wasTurnedOnOrOff(oldConfig, newConfig);
     if (!status) {
@@ -79,32 +94,69 @@ const featureNotifications: Partial<
       title: 'featureConfigChangeModalAudioVideoHeadline',
     };
   },
-  [FEATURE_KEY.ENFORCE_DOWNLOAD_PATH]: (oldConfig, newConfig) => {
-    const status = wasTurnedOnOrOff(oldConfig, newConfig);
-    if (!status) {
+
+  [FEATURE_KEY.APPLOCK]: (oldConfig, newConfig) => {
+    const shouldWarn = oldConfig?.config.enforceAppLock === true && newConfig?.config.enforceAppLock === false;
+    if (!shouldWarn) {
       return undefined;
     }
-    if (newConfig && 'config' in newConfig) {
-      amplify.publish(
-        WebAppEvents.TEAM.DOWNLOAD_PATH_UPDATE,
-        newConfig.status === FeatureStatus.ENABLED ? newConfig.config.enforcedDownloadLocation : undefined,
-      );
-    }
     return {
-      htmlMessage:
-        status === FeatureStatus.ENABLED
-          ? t('featureConfigChangeModalDownloadPathEnabled')
-          : t('featureConfigChangeModalDownloadPathDisabled'),
-      title: 'featureConfigChangeModalDownloadPathHeadline',
-      primaryAction: {
-        action: () => {
-          if (Runtime.isDesktopApp() && status === FeatureStatus.ENABLED) {
-            // if we are in a desktop env, we just warn the wrapper that we need to reload. It then decide what should be done
-            amplify.publish(WebAppEvents.LIFECYCLE.RESTART);
-          }
-        },
-      },
+      htmlMessage: t('featureConfigChangeModalApplock'),
+      title: 'featureConfigChangeModalApplockHeadline',
     };
+  },
+
+  [FEATURE_KEY.ENFORCE_DOWNLOAD_PATH]: (oldConfig, newConfig) => {
+    const handleDlPathChange: (
+      status: FeatureStatus | boolean,
+    ) => undefined | {htmlMessage: string; title: Title; primaryAction?: ButtonAction} = status => {
+      if (newConfig && 'config' in newConfig) {
+        localStorage.setItem('enforcedDownloadLocation', newConfig.config.enforcedDownloadLocation);
+        amplify.publish(
+          WebAppEvents.TEAM.DOWNLOAD_PATH_UPDATE,
+          newConfig.status === FeatureStatus.ENABLED ? newConfig.config.enforcedDownloadLocation : undefined,
+        );
+      }
+
+      return {
+        htmlMessage:
+          status === FeatureStatus.ENABLED
+            ? t('featureConfigChangeModalDownloadPathEnabled')
+            : status === FeatureStatus.DISABLED
+              ? t('featureConfigChangeModalDownloadPathDisabled')
+              : t('featureConfigChangeModalDownloadPathChanged'),
+        title: 'featureConfigChangeModalDownloadPathHeadline',
+        primaryAction: {
+          action: () => {
+            if (Runtime.isDesktopApp() && status !== FeatureStatus.DISABLED) {
+              amplify.publish(WebAppEvents.LIFECYCLE.RESTART);
+            }
+          },
+        },
+      };
+    };
+
+    if (!oldConfig && newConfig?.status === FeatureStatus.ENABLED && 'config' in newConfig) {
+      return handleDlPathChange(FeatureStatus.ENABLED);
+    }
+
+    if (
+      newConfig &&
+      'config' in newConfig &&
+      oldConfig &&
+      'config' in oldConfig &&
+      Runtime.isDesktopApp() &&
+      Runtime.isWindows()
+    ) {
+      const status = wasTurnedOnOrOff(oldConfig, newConfig);
+      const configStatus = newConfig?.config?.enforcedDownloadLocation !== oldConfig?.config?.enforcedDownloadLocation;
+      if (!status && !configStatus) {
+        return undefined;
+      }
+      localStorage.setItem('enforcedDownloadLocation', newConfig.config.enforcedDownloadLocation);
+      return handleDlPathChange(status);
+    }
+    return undefined;
   },
   [FEATURE_KEY.SELF_DELETING_MESSAGES]: (oldConfig, newConfig) => {
     if (!oldConfig || !('config' in oldConfig) || !newConfig || !('config' in newConfig)) {
@@ -152,7 +204,7 @@ const featureNotifications: Partial<
         {brandName: Config.getConfig().BRAND_NAME},
         replaceEnterprise,
       ),
-      title: 'featureConfigChangeModalConferenceCallingTitle',
+      title: 'featureConfigChangeModalConferenceCallingHeadline',
     };
   },
   [FEATURE_KEY.CONVERSATION_GUEST_LINKS]: (oldConfig, newConfig) => {
@@ -168,7 +220,7 @@ const featureNotifications: Partial<
       title: 'featureConfigChangeModalConversationGuestLinksHeadline',
     };
   },
-};
+} as const;
 
 function wasTurnedOnOrOff(oldConfig?: FeatureWithoutConfig, newConfig?: FeatureWithoutConfig): boolean | FeatureStatus {
   if (oldConfig?.status && newConfig?.status && oldConfig.status !== newConfig.status) {
@@ -197,7 +249,9 @@ export function FeatureConfigChangeNotifier({teamState, selfUserId}: Props): nul
     if (previous && config) {
       Object.entries(featureNotifications).forEach(([feature, getMessage]) => {
         const featureKey = feature as FEATURE_KEY;
-        const message = getMessage(previous?.[featureKey], config[featureKey]);
+        const message = getMessage(previous?.[featureKey] as any, config[featureKey] as any);
+        const isEnforceDownloadPath = featureKey === FEATURE_KEY.ENFORCE_DOWNLOAD_PATH;
+
         if (!message) {
           return;
         }
@@ -214,7 +268,15 @@ export function FeatureConfigChangeNotifier({teamState, selfUserId}: Props): nul
             }),
           },
           primaryAction: message.primaryAction,
-          hideCloseBtn: featureKey === FEATURE_KEY.ENFORCE_DOWNLOAD_PATH,
+          hideCloseBtn: isEnforceDownloadPath,
+          preventClose: isEnforceDownloadPath,
+          close: isEnforceDownloadPath
+            ? () => {
+                if (Runtime.isDesktopApp() && config[featureKey]?.status !== FeatureStatus.DISABLED) {
+                  amplify.publish(WebAppEvents.LIFECYCLE.RESTART);
+                }
+              }
+            : undefined,
         });
       });
     }

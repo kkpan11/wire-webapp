@@ -35,10 +35,12 @@ import {ContentViewModel} from './ContentViewModel';
 import type {MainViewModel, ViewModelRepositories} from './MainViewModel';
 
 import type {CallingRepository} from '../calling/CallingRepository';
+import {Config} from '../Config';
 import type {ConversationRepository} from '../conversation/ConversationRepository';
 import {ConversationState} from '../conversation/ConversationState';
 import type {Conversation} from '../entity/Conversation';
 import type {User} from '../entity/User';
+import {SidebarTabs, useSidebarStore} from '../page/LeftSidebar/panels/Conversations/useSidebarStore';
 import {PanelState} from '../page/RightSidebar';
 import {useAppMainState} from '../page/state';
 import {ContentState, ListState, useAppState} from '../page/useAppState';
@@ -184,9 +186,11 @@ export class ListViewModel {
 
   onKeyDownListView = (keyboardEvent: KeyboardEvent) => {
     const {currentModalId} = usePrimaryModalState.getState();
+    const {currentTab} = useSidebarStore.getState();
+
     // don't switch view for primary modal(ex: preferences->set status->modal opened)
     // when user press escape, only close the modal and stay within the preference screen
-    if (isEscapeKey(keyboardEvent) && currentModalId === null) {
+    if (isEscapeKey(keyboardEvent) && currentModalId === null && currentTab !== SidebarTabs.PREFERENCES) {
       const newState = this.isActivatedAccount() ? ListState.CONVERSATIONS : ListState.TEMPORARY_GUEST;
       this.switchList(newState);
     }
@@ -237,6 +241,9 @@ export class ListViewModel {
   openPreferencesAccount = async (): Promise<void> => {
     await this.teamRepository.getTeam();
 
+    const {setCurrentTab} = useSidebarStore.getState();
+    setCurrentTab(SidebarTabs.PREFERENCES);
+
     this.switchList(ListState.PREFERENCES);
     this.contentViewModel.switchContent(ContentState.PREFERENCES_ACCOUNT);
   };
@@ -281,12 +288,14 @@ export class ListViewModel {
   };
 
   readonly openConversations = (archive = false): void => {
+    const {currentTab, setCurrentTab} = useSidebarStore.getState();
     const newState = this.isActivatedAccount()
       ? archive
         ? ListState.ARCHIVE
         : ListState.CONVERSATIONS
       : ListState.TEMPORARY_GUEST;
     this.switchList(newState, false);
+    setCurrentTab(archive ? SidebarTabs.ARCHIVES : currentTab);
   };
 
   private readonly hideList = (): void => {
@@ -334,15 +343,15 @@ export class ListViewModel {
         entries.push({
           click: () => this.clickToOpenNotificationSettings(conversationEntity),
           label: t('conversationsPopoverNotificationSettings'),
-          title: t('tooltipConversationsNotifications', notificationsShortcut),
+          title: t('tooltipConversationsNotifications', {shortcut: notificationsShortcut}),
         });
       } else {
         const label = conversationEntity.showNotificationsNothing()
           ? t('conversationsPopoverNotify')
           : t('conversationsPopoverSilence');
         const title = conversationEntity.showNotificationsNothing()
-          ? t('tooltipConversationsNotify', notificationsShortcut)
-          : t('tooltipConversationsSilence', notificationsShortcut);
+          ? t('tooltipConversationsNotify', {shortcut: notificationsShortcut})
+          : t('tooltipConversationsSilence', {shortcut: notificationsShortcut});
 
         entries.push({
           click: () => this.clickToToggleMute(conversationEntity),
@@ -374,7 +383,7 @@ export class ListViewModel {
       if (customLabel) {
         entries.push({
           click: () => conversationLabelRepository.removeConversationFromLabel(customLabel, conversationEntity),
-          label: t('conversationsPopoverRemoveFrom', customLabel.name),
+          label: t('conversationsPopoverRemoveFrom', {name: customLabel.name}, {}, true),
         });
       }
 
@@ -395,7 +404,7 @@ export class ListViewModel {
       entries.push({
         click: () => this.clickToArchive(conversationEntity),
         label: t('conversationsPopoverArchive'),
-        title: t('tooltipConversationsArchive', shortcut),
+        title: t('tooltipConversationsArchive', {shortcut}),
       });
     }
 
@@ -416,11 +425,17 @@ export class ListViewModel {
     if (!conversationEntity.isGroup()) {
       const userEntity = conversationEntity.firstUserEntity();
       const canBlock = userEntity && (userEntity.isConnected() || userEntity.isRequest());
+      const canUnblock = userEntity && userEntity.isBlocked();
 
       if (canBlock) {
         entries.push({
           click: () => this.clickToBlock(conversationEntity),
           label: t('conversationsPopoverBlock'),
+        });
+      } else if (canUnblock) {
+        entries.push({
+          click: () => this.clickToUnblock(conversationEntity),
+          label: t('conversationsPopoverUnblock'),
         });
       }
     }
@@ -432,7 +447,18 @@ export class ListViewModel {
       });
     }
 
-    showContextMenu(event, entries, 'conversation-list-options-menu');
+    if (
+      Config.getConfig().FEATURE.ENABLE_REMOVE_GROUP_CONVERSATION &&
+      conversationEntity.isGroup() &&
+      conversationEntity.isSelfUserRemoved()
+    ) {
+      entries.push({
+        click: () => this.actionsViewModel.removeConversation(conversationEntity),
+        label: t('conversationsPopoverDeleteForMe'),
+      });
+    }
+
+    showContextMenu({event, entries, identifier: 'conversation-list-options-menu'});
   };
 
   readonly clickToArchive = (conversationEntity = this.conversationState.activeConversation()): void => {
@@ -443,9 +469,20 @@ export class ListViewModel {
 
   clickToBlock = async (conversationEntity: Conversation): Promise<void> => {
     const userEntity = conversationEntity.firstUserEntity();
-    const hideConversation = this.shouldHideConversation(conversationEntity);
-    const nextConversationEntity = this.conversationRepository.getNextConversation(conversationEntity);
-    await this.actionsViewModel.blockUser(userEntity, hideConversation, nextConversationEntity);
+
+    if (!userEntity) {
+      return;
+    }
+
+    await this.actionsViewModel.blockUser(userEntity);
+  };
+
+  clickToUnblock = async (conversationEntity: Conversation): Promise<void> => {
+    const userEntity = conversationEntity.firstUserEntity();
+    if (!userEntity) {
+      return;
+    }
+    await this.actionsViewModel.unblockUser(userEntity);
   };
 
   readonly clickToCancelRequest = (conversationEntity: Conversation): void => {

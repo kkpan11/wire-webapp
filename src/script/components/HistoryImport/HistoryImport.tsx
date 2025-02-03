@@ -21,7 +21,7 @@ import {useEffect, useState} from 'react';
 
 import {Button, ButtonVariant} from '@wireapp/react-ui-kit';
 
-import {Icon} from 'Components/Icon';
+import * as Icon from 'Components/Icon';
 import {LoadingBar} from 'Components/LoadingBar/LoadingBar';
 import {PrimaryModal} from 'Components/Modals/PrimaryModal';
 import {User} from 'src/script/entity/User';
@@ -123,6 +123,10 @@ const HistoryImport = ({user, backupRepository, file, switchContent}: HistoryImp
       setErrorSecondary(t('backupImportAccountErrorSecondary'));
     } else if (error instanceof IncompatibleBackupError) {
       setErrorHeadline(t('backupImportVersionErrorHeadline'));
+      //@ts-expect-error
+      //the "brandname" should be provided
+      //the correct syntax is suspected to create issues with electron's console see https://wearezeta.atlassian.net/browse/WPB-15317
+      //TODO: figure out the issue with the electron console
       setErrorSecondary(t('backupImportVersionErrorSecondary', Config.getConfig().BRAND_NAME));
     } else if (error instanceof IncompatibleBackupFormatError) {
       setErrorHeadline(t('backupImportFormatErrorHeadline'));
@@ -216,20 +220,15 @@ const HistoryImport = ({user, backupRepository, file, switchContent}: HistoryImp
           <>
             <LoadingBar progress={loadingProgress} message={loadingMessage} className="with-cancel" />
 
-            <button
-              type="button"
-              className="cancel-button accent-text"
-              onClick={onCancel}
-              data-uie-name="do-cancel-history-import"
-            >
+            <Button variant={ButtonVariant.SECONDARY} onClick={onCancel} data-uie-name="do-cancel-history-import">
               {t('backupCancel')}
-            </button>
+            </Button>
           </>
         )}
 
         {isDone && (
           <div className="history-message">
-            <Icon.Check />
+            <Icon.CheckIcon />
             <h2 className="history-message__headline" data-uie-name="status-history-import-success">
               {t('backupImportSuccessHeadline')}
             </h2>
